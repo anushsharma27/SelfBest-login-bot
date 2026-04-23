@@ -1,145 +1,180 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
 
-// Maps to store per-user state
-const sessions = new Map();    // userId → socket
-const qrCodes = new Map();     // userId → base64 QR string
-const statuses = new Map();    // userId → 'disconnected' | 'connecting' | 'connected'
+const sessions = new Map();
+const qrCodes = new Map();
+const statuses = new Map();
+
+const pendingActions = new Map();
+const messageHandlers = new Map();
 
 const AUTH_DIR = path.join(__dirname, 'auth_info');
 
-/**
- * Initialize or resume a WhatsApp session for a user
- */
 async function initSession(userId) {
-  // If already connected, skip
-  if (sessions.has(userId) && statuses.get(userId) === 'connected') {
-    return;
-  }
+  if (sessions.has(userId) && statuses.get(userId) === 'connected') return;
 
   statuses.set(userId, 'connecting');
   qrCodes.delete(userId);
 
-  const sessionDir = path.join(AUTH_DIR, String(userId));
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
+  if (!fs.existsSync(AUTH_DIR)) {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
   }
 
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
-  const logger = pino({ level: 'silent' });
-
-  const sock = makeWASocket({
-    auth: state,
-    logger,
-    printQRInTerminal: true,
-    browser: ['ClockBot', 'Chrome', '1.0.0'],
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 60000,
-    keepAliveIntervalMs: 10000,
-    retryRequestDelayMs: 2000,
-  });
-
-  // Listen for credential updates
-  sock.ev.on('creds.update', saveCreds);
-
-  // Listen for connection updates
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      // Generate base64 QR code
-      try {
-        const qrBase64 = await QRCode.toDataURL(qr);
-        qrCodes.set(userId, qrBase64);
-        statuses.set(userId, 'connecting');
-      } catch (err) {
-        console.error(`[WA:${userId}] QR generation error:`, err.message);
-      }
-    }
-
-    if (connection === 'open') {
-      statuses.set(userId, 'connected');
-      qrCodes.delete(userId);
-      console.log(`✅ [WA:${userId}] Connected`);
-    }
-
-    if (connection === 'close') {
-      sessions.delete(userId);
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      if (shouldReconnect) {
-        statuses.set(userId, 'disconnected');
-        console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
-        setTimeout(() => initSession(userId), 5000);
-      } else {
-        statuses.set(userId, 'disconnected');
-        qrCodes.delete(userId);
-        console.log(`🚪 [WA:${userId}] Logged out`);
-      }
+  const client = new Client({
+    authStrategy: new LocalAuth({
+      clientId: String(userId),
+      dataPath: AUTH_DIR
+    }),
+    puppeteer: {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process'
+      ]
     }
   });
 
-  sessions.set(userId, sock);
+  client.on('qr', async (qr) => {
+    try {
+      const qrBase64 = await QRCode.toDataURL(qr);
+      qrCodes.set(userId, qrBase64);
+      statuses.set(userId, 'connecting');
+      console.log(`📱 [WA:${userId}] QR code generated`);
+    } catch (err) {
+      console.error(`[WA:${userId}] QR generation error:`, err.message);
+    }
+  });
+
+  client.on('ready', () => {
+    statuses.set(userId, 'connected');
+    qrCodes.delete(userId);
+    console.log(`✅ [WA:${userId}] Connected and ready`);
+  });
+
+  client.on('authenticated', () => {
+    console.log(`🔐 [WA:${userId}] Authenticated`);
+  });
+
+  client.on('auth_failure', (msg) => {
+    statuses.set(userId, 'disconnected');
+    sessions.delete(userId);
+    qrCodes.delete(userId);
+    console.error(`❌ [WA:${userId}] Auth failure: ${msg}`);
+  });
+
+  client.on('disconnected', (reason) => {
+    statuses.set(userId, 'disconnected');
+    sessions.delete(userId);
+    console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
+    console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
+    setTimeout(() => initSession(userId), 5000);
+  });
+
+  client.on('message', (msg) => {
+    if (msg.fromMe) return;
+
+    const from = msg.from.replace('@c.us', '');
+    const body = msg.body || '';
+
+    console.log(`[WA:${userId}] 📩 From ${from}: "${body}"`);
+
+    for (const [pattern, handler] of messageHandlers) {
+      if (body.toLowerCase().includes(pattern.toLowerCase())) {
+        console.log(`[WA:${userId}] ✅ Matched: ${pattern}`);
+        handler(userId, from, body);
+      }
+    }
+  });
+
+  sessions.set(userId, client);
+
+  try {
+    await client.initialize();
+  } catch (err) {
+    console.error(`❌ [WA:${userId}] Init error:`, err.message);
+    statuses.set(userId, 'disconnected');
+    sessions.delete(userId);
+    setTimeout(() => initSession(userId), 5000);
+  }
 }
 
-/**
- * Get the latest QR code for a user as base64 data URL
- */
 function getQR(userId) {
   return qrCodes.get(userId) || null;
 }
 
-/**
- * Get the connection status for a user
- */
 function getStatus(userId) {
   return statuses.get(userId) || 'disconnected';
 }
 
-/**
- * Send a WhatsApp message from a user's session
- * @param {number} userId
- * @param {string} number - format: countrycode+number e.g. 919876543210
- * @param {string} message - text message to send
- */
 async function sendMessage(userId, number, message) {
-  const sock = sessions.get(userId);
-  if (!sock) {
-    throw new Error('WhatsApp session not connected');
+  const client = sessions.get(userId);
+
+  if (!client) {
+    throw new Error(`No session found for user ${userId}`);
   }
 
-  const jid = `${number}@s.whatsapp.net`;
-  await sock.sendMessage(jid, { text: message });
+  if (statuses.get(userId) !== 'connected') {
+    throw new Error(`WhatsApp not connected for user ${userId}. Status: ${statuses.get(userId)}`);
+  }
+
+  const chatId = `${number}@c.us`;
+
+  await client.sendMessage(chatId, message);
   console.log(`📤 [WA:${userId}] Sent "${message}" to ${number}`);
 }
 
-/**
- * Disconnect and clear session files for a user
- */
 async function disconnectSession(userId) {
-  const sock = sessions.get(userId);
-  if (sock) {
+  const client = sessions.get(userId);
+  if (client) {
     try {
-      await sock.logout();
+      await client.destroy();
     } catch (err) {
-      // Ignore logout errors
+      // ignore
     }
     sessions.delete(userId);
   }
   qrCodes.delete(userId);
   statuses.set(userId, 'disconnected');
 
-  // Remove auth files
-  const sessionDir = path.join(AUTH_DIR, String(userId));
+  const sessionDir = path.join(AUTH_DIR, `session-${userId}`);
   if (fs.existsSync(sessionDir)) {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
-  console.log(`🗑️  [WA:${userId}] Session cleared`);
+
+  console.log(`🗑️ [WA:${userId}] Session cleared`);
 }
 
-module.exports = { initSession, getQR, getStatus, sendMessage, disconnectSession };
+function registerMessageHandler(pattern, handler) {
+  messageHandlers.set(pattern, handler);
+}
+
+function getPendingAction(userId) {
+  return pendingActions.get(userId) || null;
+}
+
+function setPendingAction(userId, action) {
+  pendingActions.set(userId, action);
+}
+
+function clearPendingAction(userId) {
+  pendingActions.delete(userId);
+}
+
+module.exports = {
+  initSession,
+  getQR,
+  getStatus,
+  sendMessage,
+  disconnectSession,
+  registerMessageHandler,
+  getPendingAction,
+  setPendingAction,
+  clearPendingAction
+};

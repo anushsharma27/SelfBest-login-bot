@@ -2,6 +2,7 @@ const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const { db } = require('../db');
 const { reloadSchedule } = require('../scheduler');
+const { sendMessage, getStatus } = require('../whatsapp');
 
 const router = express.Router();
 
@@ -42,14 +43,22 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Clock-in time is required' });
     }
 
+    if (!clock_in_message) {
+      return res.status(400).json({ error: 'Clock-in message is required' });
+    }
+
+    if (!clock_out_message) {
+      return res.status(400).json({ error: 'Clock-out message is required' });
+    }
+
     if (!bot_number) {
       return res.status(400).json({ error: 'Bot number is required' });
     }
 
-    const clock_out_time = addHours(clock_in_time, 9);
+    const clock_out_time = req.body.clock_out_time || addHours(clock_in_time, 9);
     const daysJson = JSON.stringify(days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
-    const inMsg = clock_in_message || 'in';
-    const outMsg = clock_out_message || 'out';
+    const inMsg = clock_in_message;
+    const outMsg = clock_out_message;
 
     // Check if schedule exists
     const existing = await db.execute({
@@ -178,6 +187,81 @@ router.delete('/pause-today', async (req, res) => {
   } catch (err) {
     console.error('Resume today error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/schedule/test-message — send a test message now
+router.post('/test-message', async (req, res) => {
+  try {
+    const { bot_number, message } = req.body;
+
+    if (!bot_number) {
+      return res.status(400).json({ error: 'Bot number is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const status = getStatus(req.user.id);
+    if (status !== 'connected') {
+      return res.status(400).json({ error: `WhatsApp not connected (${status})` });
+    }
+
+    // Strip spaces from bot number for sending
+    const cleanNumber = bot_number.replace(/\s/g, '');
+    await sendMessage(req.user.id, cleanNumber, message);
+
+    res.json({ success: true, message: 'Test message sent!' });
+  } catch (err) {
+    console.error('Test message error:', err);
+    res.status(500).json({ error: err.message || 'Failed to send message' });
+  }
+});
+
+// POST /api/schedule/clock-in — trigger clock-in flow manually
+router.post('/clock-in', async (req, res) => {
+  try {
+    const result = await db.execute({
+      sql: `SELECT * FROM schedules WHERE user_id = ?`,
+      args: [req.user.id],
+    });
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No schedule found' });
+    }
+
+    const schedule = result.rows[0];
+    const { startClockIn } = require('../scheduler');
+    await startClockIn(req.user.id, schedule.bot_number, schedule.clock_in_message);
+
+    res.json({ success: true, message: 'Clock-in initiated. Check WhatsApp for status request.' });
+  } catch (err) {
+    console.error('Clock-in error:', err);
+    res.status(500).json({ error: err.message || 'Failed to initiate clock-in' });
+  }
+});
+
+// POST /api/schedule/clock-out — trigger clock-out flow manually
+router.post('/clock-out', async (req, res) => {
+  try {
+    const result = await db.execute({
+      sql: `SELECT * FROM schedules WHERE user_id = ?`,
+      args: [req.user.id],
+    });
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No schedule found' });
+    }
+
+    const schedule = result.rows[0];
+    const { startClockOut } = require('../scheduler');
+    await startClockOut(req.user.id, schedule.bot_number, schedule.clock_out_message);
+
+    res.json({ success: true, message: 'Clock-out initiated. Reply "confirm" on WhatsApp.' });
+  } catch (err) {
+    console.error('Clock-out error:', err);
+    res.status(500).json({ error: err.message || 'Failed to initiate clock-out' });
   }
 });
 

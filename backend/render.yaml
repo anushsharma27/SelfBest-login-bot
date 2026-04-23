@@ -18,6 +18,10 @@ services:
         value: "@Nush123"
       - key: PORT
         value: "3000"
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "false"
+      - key: PUPPETEER_CACHE_DIR
+        value: "/app/.cache/puppeteer"
     disk:
       name: auth-info
       mountPath: /app/auth_info
