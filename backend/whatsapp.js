@@ -1,4 +1,5 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const puppeteer = require('puppeteer');
 const QRCode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
@@ -7,6 +8,8 @@ const sessions = new Map();
 const qrCodes = new Map();
 const statuses = new Map();
 const retryCount = new Map();
+const retryTimers = new Map();
+const launchLocks = new Set();
 
 const MAX_RETRIES = 5;
 
@@ -50,14 +53,50 @@ function clearSessionFiles(userId) {
   }
 }
 
+function clearRetryTimer(userId) {
+  const timer = retryTimers.get(userId);
+  if (timer) {
+    clearTimeout(timer);
+    retryTimers.delete(userId);
+  }
+}
+
+function scheduleReconnect(userId, delay, reason) {
+  clearRetryTimer(userId);
+  retryTimers.set(userId, setTimeout(() => {
+    retryTimers.delete(userId);
+    initSession(userId).catch((err) => {
+      console.error(`❌ [WA:${userId}] ${reason} reconnect failed:`, err.message);
+    });
+  }, delay));
+}
+
+async function closeExistingClient(userId) {
+  const existing = sessions.get(userId);
+  if (!existing) return;
+
+  try {
+    await existing.destroy();
+  } catch (err) {
+    // ignore
+  }
+  sessions.delete(userId);
+}
+
 async function initSession(userId) {
   const current = statuses.get(userId);
-  if (current === 'connected' || current === 'initializing') return;
+  if (current === 'connected' || current === 'initializing' || launchLocks.has(userId)) return;
+
+  launchLocks.add(userId);
+  clearRetryTimer(userId);
+  await closeExistingClient(userId);
 
   statuses.set(userId, 'initializing');
   qrCodes.delete(userId);
 
   const authDir = ensureAuthDir();
+  const executablePath = puppeteer.executablePath();
+  console.log(`🔧 [WA:${userId}] Using Chrome executable: ${executablePath}`);
 
   const client = new Client({
     authStrategy: new LocalAuth({
@@ -65,13 +104,17 @@ async function initSession(userId) {
       dataPath: authDir
     }),
     puppeteer: {
-      headless: true,
+      executablePath,
+      headless: 'new',
+      dumpio: !!process.env.RENDER,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--no-first-run'
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process'
       ]
     }
   });
@@ -101,7 +144,6 @@ async function initSession(userId) {
 
   client.on('auth_failure', (msg) => {
     statuses.set(userId, 'disconnected');
-    sessions.delete(userId);
     qrCodes.delete(userId);
     console.error(`❌ [WA:${userId}] Auth failure: ${msg}`);
 
@@ -112,7 +154,7 @@ async function initSession(userId) {
     if (attempts < MAX_RETRIES) {
       const delay = Math.min(5000 * attempts, 30000);
       console.log(`🔄 [WA:${userId}] Retrying from a clean auth state in ${delay / 1000}s...`);
-      setTimeout(() => initSession(userId), delay);
+      scheduleReconnect(userId, delay, 'Auth failure');
     } else {
       console.error(`❌ [WA:${userId}] Max retries reached after auth failure. Manual reconnect required.`);
       retryCount.set(userId, 0);
@@ -121,10 +163,9 @@ async function initSession(userId) {
 
   client.on('disconnected', (reason) => {
     statuses.set(userId, 'disconnected');
-    sessions.delete(userId);
     console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
     console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
-    setTimeout(() => initSession(userId), 5000);
+    scheduleReconnect(userId, 5000, 'Disconnected');
   });
 
   client.on('message', (msg) => {
@@ -150,17 +191,25 @@ async function initSession(userId) {
   } catch (err) {
     console.error(`❌ [WA:${userId}] Init error:`, err.message);
     statuses.set(userId, 'disconnected');
+    qrCodes.delete(userId);
+    try {
+      await client.destroy();
+    } catch (destroyErr) {
+      // ignore
+    }
     sessions.delete(userId);
     const attempts = (retryCount.get(userId) || 0) + 1;
     retryCount.set(userId, attempts);
     if (attempts < MAX_RETRIES) {
       const delay = Math.min(5000 * attempts, 30000); // backoff: 5s, 10s, 15s…
       console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay/1000}s…`);
-      setTimeout(() => initSession(userId), delay);
+      scheduleReconnect(userId, delay, 'Init');
     } else {
       console.error(`❌ [WA:${userId}] Max retries reached. Manual reconnect required.`);
       retryCount.set(userId, 0);
     }
+  } finally {
+    launchLocks.delete(userId);
   }
 }
 
@@ -190,6 +239,7 @@ async function sendMessage(userId, number, message) {
 }
 
 async function disconnectSession(userId) {
+  clearRetryTimer(userId);
   const client = sessions.get(userId);
   if (client) {
     try {
