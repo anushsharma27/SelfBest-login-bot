@@ -48,11 +48,21 @@ async function pollStatus() {
       body.innerHTML = `<div class="flex items-center gap-3 text-green-400"><i class="fa-solid fa-circle-check text-3xl"></i>
         <div><div class="font-semibold text-white">Connected & Ready</div><div class="text-sm text-slate-400">Messages will send automatically</div></div></div>`;
       clearInterval(qrInterval); qrInterval = null;
-    } else {
-      badge.className = status==='connecting'?'badge badge-yellow':'badge badge-red';
-      badge.textContent = status==='connecting'?'Connecting…':'Disconnected';
+    } else if (status === 'initializing') {
+      badge.className = 'badge badge-yellow';
+      badge.textContent = 'Starting…';
+      body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Starting WhatsApp session…</div>`;
+      clearInterval(qrInterval); qrInterval = null;
+    } else if (status === 'connecting') {
+      badge.className = 'badge badge-yellow';
+      badge.textContent = 'Connecting…';
       await loadQR();
-      if (!qrInterval) qrInterval = setInterval(loadQR, 10000);
+      if (!qrInterval) qrInterval = setInterval(loadQR, 60000);
+    } else {
+      badge.className = 'badge badge-red';
+      badge.textContent = 'Disconnected';
+      body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> Not connected. Click Reconnect to start.</div>`;
+      clearInterval(qrInterval); qrInterval = null;
     }
   } catch(e) {}
 }
@@ -70,7 +80,7 @@ async function loadQR() {
             <div><span class="text-brand-400 font-bold">1.</span> Open WhatsApp</div>
             <div><span class="text-brand-400 font-bold">2.</span> ⋮ → Linked Devices</div>
             <div><span class="text-brand-400 font-bold">3.</span> Link a Device → Scan QR</div>
-            <div class="text-xs text-slate-600 mt-2">Auto-refreshes every 10s</div>
+            <div class="text-xs text-slate-600 mt-2">Auto-refreshes every 60s</div>
           </div></div>`
       : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Generating QR…</div>`;
   } catch(e) {}

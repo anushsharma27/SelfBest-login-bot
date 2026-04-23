@@ -76,7 +76,7 @@ async function pollStatus() {
       badge.className = 'badge badge-red';
       badge.textContent = 'Disconnected';
       loadQR();
-      if (!qrInterval) qrInterval = setInterval(loadQR, 10000);
+      if (!qrInterval) qrInterval = setInterval(loadQR, 60000);
     }
   } catch (e) {}
 }
@@ -95,7 +95,7 @@ async function loadQR() {
           <div class="flex items-center gap-2"><span class="text-brand-400 font-bold">2.</span> Tap ⋮ → Linked Devices</div>
           <div class="flex items-center gap-2"><span class="text-brand-400 font-bold">3.</span> Tap "Link a Device"</div>
           <div class="flex items-center gap-2"><span class="text-brand-400 font-bold">4.</span> Point camera at QR code</div>
-          <div class="text-xs text-slate-600 mt-2">QR refreshes every 10s</div>
+          <div class="text-xs text-slate-600 mt-2">QR refreshes every 60s</div>
         </div>
       </div>`;
     } else {
