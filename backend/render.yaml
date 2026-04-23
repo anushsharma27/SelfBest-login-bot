@@ -3,7 +3,7 @@ services:
     name: whatsapp-clockin
     runtime: node
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm install && npx puppeteer browsers install chrome
     startCommand: node index.js
     envVars:
       - key: TURSO_URL
@@ -21,7 +21,7 @@ services:
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "false"
       - key: PUPPETEER_CACHE_DIR
-        value: "/app/.cache/puppeteer"
+        value: "/opt/render/project/src/backend/node_modules/.puppeteer_cache"
       - key: WHATSAPP_AUTH_DIR
         value: "/var/data/auth_info"
     disk:
