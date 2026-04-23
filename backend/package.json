@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-clockin-backend",
+  "version": "1.0.0",
+  "description": "WhatsApp Auto Clock-In/Out Backend",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "@whiskeysockets/baileys": "^6.6.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "pino": "^9.4.0",
+    "qrcode": "^1.5.4"
+  }
+}

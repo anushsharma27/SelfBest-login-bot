@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: whatsapp-clockin
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: TURSO_URL
+        value: "libsql://selfbestbot-anushsharma27.aws-ap-south-1.turso.io"
+      - key: TURSO_AUTH_TOKEN
+        value: "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzY5MjYyODAsImlkIjoiMDE5ZGIzOTUtZDgwMS03MWQ1LTlhZDUtZjNiZmNlMzU3NDU0IiwicmlkIjoiNGU5NmE0OTMtMjQyOS00NzRkLWJiNzEtYjRjZjJjZmVlM2NmIn0.w5VvrxqbxViLPHdX8ZzpnbsHoaCpF5Kro1IkIHjdicBPpXo364Ry5pZ-SISMABMZyargCSAWiN-iAiaxlVGEDA"
+      - key: JWT_SECRET
+        value: "mynameisanushsharma"
+      - key: ADMIN_EMAIL
+        value: "anushsharma26@gmail.com"
+      - key: ADMIN_PASSWORD
+        value: "@Nush123"
+      - key: PORT
+        value: "3000"
+    disk:
+      name: auth-info
+      mountPath: /app/auth_info
+      sizeGB: 1
