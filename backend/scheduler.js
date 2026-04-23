@@ -146,8 +146,9 @@ async function tick() {
   const now = new Date();
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const currentDay = dayNames[now.getDay()];
-  const currentTime = now.toTimeString().slice(0, 5); // HH:mm
+  const currentTime = now.toTimeString().slice(0, 5); // HH:mm (zero-padded, e.g. "04:41")
   const todayDate = now.toISOString().slice(0, 10);    // YYYY-MM-DD
+  console.log(`[Scheduler] Tick: ${currentDay} ${currentTime} (${todayDate})`);
 
   // Reset daily tracking at midnight (00:01)
   if (currentTime === '00:01') {
@@ -189,9 +190,18 @@ async function tick() {
       // Check for pending action from previous minutes
       const pending = getPendingAction(userId);
 
+      // Normalize stored times to HH:mm (handle "4:41" → "04:41")
+      const normalizeTime = (t) => {
+        if (!t) return '';
+        const [h, m] = t.split(':');
+        return `${h.padStart(2, '0')}:${(m || '00').padStart(2, '0')}`;
+      };
+      const clockInTime  = normalizeTime(schedule.clock_in_time);
+      const clockOutTime = normalizeTime(schedule.clock_out_time);
+
       // Check clock-in
       const clockInKey = `${schedule.id}-${todayDate}-clock_in`;
-      if (currentTime === schedule.clock_in_time && !status.clockedIn && !pending && !sentToday.has(clockInKey)) {
+      if (currentTime === clockInTime && !status.clockedIn && !pending && !sentToday.has(clockInKey)) {
         // Debounce: skip if triggered within last 2 minutes
         const lastTrigger = lastTriggerTime.get(`${schedule.id}-clock_in`) || 0;
         if (Date.now() - lastTrigger < 120000) {
@@ -204,8 +214,11 @@ async function tick() {
       }
 
       // Check clock-out
+      // NOTE: We do NOT require clockedIn===true here because the server may have
+      // restarted since clock-in happened (wiping in-memory state). We rely on
+      // sentToday + the database logs to prevent double-sends instead.
       const clockOutKey = `${schedule.id}-${todayDate}-clock_out`;
-      if (currentTime === schedule.clock_out_time && !status.clockedOut && status.clockedIn && !pending && !sentToday.has(clockOutKey)) {
+      if (currentTime === clockOutTime && !status.clockedOut && !pending && !sentToday.has(clockOutKey)) {
         // Debounce: skip if triggered within last 2 minutes
         const lastTrigger = lastTriggerTime.get(`${schedule.id}-clock_out`) || 0;
         if (Date.now() - lastTrigger < 120000) {

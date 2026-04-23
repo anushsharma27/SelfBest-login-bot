@@ -37,7 +37,7 @@ router.get('/', async (req, res) => {
 // POST /api/schedule — create or update schedule
 router.post('/', async (req, res) => {
   try {
-    const { clock_in_time, clock_in_message, clock_out_message, days, bot_number } = req.body;
+    const { clock_in_time, clock_out_time, clock_in_message, clock_out_message, days, bot_number } = req.body;
 
     if (!clock_in_time) {
       return res.status(400).json({ error: 'Clock-in time is required' });
@@ -55,7 +55,6 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Bot number is required' });
     }
 
-    const clock_out_time = req.body.clock_out_time || addHours(clock_in_time, 9);
     const daysJson = JSON.stringify(days || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
     const inMsg = clock_in_message;
     const outMsg = clock_out_message;

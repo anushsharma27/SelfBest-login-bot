@@ -6,6 +6,9 @@ const fs = require('fs');
 const sessions = new Map();
 const qrCodes = new Map();
 const statuses = new Map();
+const retryCount = new Map();
+
+const MAX_RETRIES = 5;
 
 const pendingActions = new Map();
 const messageHandlers = new Map();
@@ -13,9 +16,10 @@ const messageHandlers = new Map();
 const AUTH_DIR = path.join(__dirname, 'auth_info');
 
 async function initSession(userId) {
-  if (sessions.has(userId) && statuses.get(userId) === 'connected') return;
+  const current = statuses.get(userId);
+  if (current === 'connected' || current === 'initializing') return;
 
-  statuses.set(userId, 'connecting');
+  statuses.set(userId, 'initializing');
   qrCodes.delete(userId);
 
   if (!fs.existsSync(AUTH_DIR)) {
@@ -34,9 +38,7 @@ async function initSession(userId) {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process'
+        '--no-first-run'
       ]
     }
   });
@@ -45,7 +47,8 @@ async function initSession(userId) {
     try {
       const qrBase64 = await QRCode.toDataURL(qr);
       qrCodes.set(userId, qrBase64);
-      statuses.set(userId, 'connecting');
+      statuses.set(userId, 'connecting');  // now visible to frontend as "Connecting"
+      retryCount.set(userId, 0);           // reset retries when we get a fresh QR
       console.log(`📱 [WA:${userId}] QR code generated`);
     } catch (err) {
       console.error(`[WA:${userId}] QR generation error:`, err.message);
@@ -55,6 +58,7 @@ async function initSession(userId) {
   client.on('ready', () => {
     statuses.set(userId, 'connected');
     qrCodes.delete(userId);
+    retryCount.set(userId, 0);
     console.log(`✅ [WA:${userId}] Connected and ready`);
   });
 
@@ -101,7 +105,16 @@ async function initSession(userId) {
     console.error(`❌ [WA:${userId}] Init error:`, err.message);
     statuses.set(userId, 'disconnected');
     sessions.delete(userId);
-    setTimeout(() => initSession(userId), 5000);
+    const attempts = (retryCount.get(userId) || 0) + 1;
+    retryCount.set(userId, attempts);
+    if (attempts < MAX_RETRIES) {
+      const delay = Math.min(5000 * attempts, 30000); // backoff: 5s, 10s, 15s…
+      console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay/1000}s…`);
+      setTimeout(() => initSession(userId), delay);
+    } else {
+      console.error(`❌ [WA:${userId}] Max retries reached. Manual reconnect required.`);
+      retryCount.set(userId, 0);
+    }
   }
 }
 
