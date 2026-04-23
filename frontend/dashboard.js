@@ -38,7 +38,7 @@ async function renderDashboard() {
 
 async function pollStatus() {
   try {
-    const { status } = await apiFetch('/api/whatsapp/status');
+    const { status, qr } = await apiFetch('/api/whatsapp/status');
     const badge = document.getElementById('wa-badge');
     const body = document.getElementById('wa-body');
     if (!badge || !body) return;
@@ -56,13 +56,12 @@ async function pollStatus() {
     } else if (status === 'connecting') {
       badge.className = 'badge badge-yellow';
       badge.textContent = 'Connecting…';
-      await loadQR();
+      renderQR(qr);
       if (!qrInterval) qrInterval = setInterval(loadQR, 60000);
     } else {
       badge.className = 'badge badge-red';
       badge.textContent = 'Disconnected';
-      body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> Not connected. Click Reconnect to start.</div>`;
-      await loadQR();
+      renderQR(qr);
       if (!qrInterval) qrInterval = setInterval(loadQR, 10000);
     }
   } catch(e) {}
@@ -71,20 +70,24 @@ async function pollStatus() {
 async function loadQR() {
   try {
     const { qr } = await apiFetch('/api/whatsapp/qr');
-    const body = document.getElementById('wa-body');
-    if (!body) return;
-    body.innerHTML = qr
-      ? `<div class="flex flex-col sm:flex-row items-center gap-6">
-          <img src="${qr}" alt="QR" class="w-44 h-44 rounded-xl border-2 border-brand-500/30"/>
-          <div class="text-sm text-slate-400 space-y-1.5">
-            <div class="font-semibold text-white mb-2">Scan to connect WhatsApp</div>
-            <div><span class="text-brand-400 font-bold">1.</span> Open WhatsApp</div>
-            <div><span class="text-brand-400 font-bold">2.</span> ⋮ → Linked Devices</div>
-            <div><span class="text-brand-400 font-bold">3.</span> Link a Device → Scan QR</div>
-            <div class="text-xs text-slate-600 mt-2">Auto-refreshes every 60s</div>
-          </div></div>`
-      : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Generating QR…</div>`;
+    renderQR(qr);
   } catch(e) {}
+}
+
+function renderQR(qr) {
+  const body = document.getElementById('wa-body');
+  if (!body) return;
+  body.innerHTML = qr
+    ? `<div class="flex flex-col sm:flex-row items-center gap-6">
+        <img src="${qr}" alt="QR" class="w-44 h-44 rounded-xl border-2 border-brand-500/30"/>
+        <div class="text-sm text-slate-400 space-y-1.5">
+          <div class="font-semibold text-white mb-2">Scan to connect WhatsApp</div>
+          <div><span class="text-brand-400 font-bold">1.</span> Open WhatsApp</div>
+          <div><span class="text-brand-400 font-bold">2.</span> ⋮ → Linked Devices</div>
+          <div><span class="text-brand-400 font-bold">3.</span> Link a Device → Scan QR</div>
+          <div class="text-xs text-slate-600 mt-2">Auto-refreshes every 60s</div>
+        </div></div>`
+    : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Generating QR…</div>`;
 }
 
 async function waReconnect() { try { await apiFetch('/api/whatsapp/reconnect',{method:'POST'}); await pollStatus(); } catch(e){alert(e.message);} }

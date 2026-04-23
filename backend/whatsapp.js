@@ -13,12 +13,34 @@ const MAX_RETRIES = 5;
 const pendingActions = new Map();
 const messageHandlers = new Map();
 
-const AUTH_DIR =
-  process.env.WHATSAPP_AUTH_DIR ||
-  (process.env.RENDER ? '/app/auth_info' : path.join(__dirname, 'auth_info'));
+const AUTH_DIR_CANDIDATES = [
+  process.env.WHATSAPP_AUTH_DIR,
+  process.env.RENDER ? '/var/data/auth_info' : null,
+  path.join(__dirname, 'auth_info')
+].filter(Boolean);
+
+let AUTH_DIR = null;
+
+function ensureAuthDir() {
+  if (AUTH_DIR) return AUTH_DIR;
+
+  for (const candidate of AUTH_DIR_CANDIDATES) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.W_OK);
+      AUTH_DIR = candidate;
+      console.log(`🔐 [WA] Using auth dir: ${AUTH_DIR}`);
+      return AUTH_DIR;
+    } catch (err) {
+      console.warn(`⚠️  [WA] Auth dir unavailable: ${candidate} (${err.message})`);
+    }
+  }
+
+  throw new Error(`No writable auth directory found. Tried: ${AUTH_DIR_CANDIDATES.join(', ')}`);
+}
 
 function getSessionDir(userId) {
-  return path.join(AUTH_DIR, `session-${userId}`);
+  return path.join(ensureAuthDir(), `session-${userId}`);
 }
 
 function clearSessionFiles(userId) {
@@ -35,14 +57,12 @@ async function initSession(userId) {
   statuses.set(userId, 'initializing');
   qrCodes.delete(userId);
 
-  if (!fs.existsSync(AUTH_DIR)) {
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-  }
+  const authDir = ensureAuthDir();
 
   const client = new Client({
     authStrategy: new LocalAuth({
       clientId: String(userId),
-      dataPath: AUTH_DIR
+      dataPath: authDir
     }),
     puppeteer: {
       headless: true,
@@ -187,6 +207,17 @@ async function disconnectSession(userId) {
   console.log(`🗑️ [WA:${userId}] Session cleared`);
 }
 
+async function reconnectSession(userId) {
+  await disconnectSession(userId);
+
+  // Let puppeteer and the old LocalAuth cleanup settle before starting again.
+  setTimeout(() => {
+    initSession(userId).catch((err) => {
+      console.error(`❌ [WA:${userId}] Background reconnect failed:`, err.message);
+    });
+  }, 1000);
+}
+
 function registerMessageHandler(pattern, handler) {
   messageHandlers.set(pattern, handler);
 }
@@ -209,6 +240,7 @@ module.exports = {
   getStatus,
   sendMessage,
   disconnectSession,
+  reconnectSession,
   registerMessageHandler,
   getPendingAction,
   setPendingAction,

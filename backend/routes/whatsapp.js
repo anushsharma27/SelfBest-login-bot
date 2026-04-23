@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { getQR, getStatus, disconnectSession, initSession } = require('../whatsapp');
+const { getQR, getStatus, disconnectSession, reconnectSession } = require('../whatsapp');
 
 const router = express.Router();
 
@@ -16,7 +16,8 @@ router.get('/qr', (req, res) => {
 // GET /api/whatsapp/status
 router.get('/status', (req, res) => {
   const status = getStatus(req.user.id);
-  res.json({ status });
+  const qr = getQR(req.user.id);
+  res.json({ status, qr });
 });
 
 // POST /api/whatsapp/disconnect
@@ -33,12 +34,11 @@ router.post('/disconnect', async (req, res) => {
 // POST /api/whatsapp/reconnect
 router.post('/reconnect', async (req, res) => {
   try {
-    await disconnectSession(req.user.id);
-    await initSession(req.user.id);
+    await reconnectSession(req.user.id);
     res.json({ message: 'Reconnecting...' });
   } catch (err) {
     console.error('Reconnect error:', err);
-    res.status(500).json({ error: 'Failed to reconnect' });
+    res.status(500).json({ error: err.message || 'Failed to reconnect' });
   }
 });
 

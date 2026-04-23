@@ -23,8 +23,8 @@ services:
       - key: PUPPETEER_CACHE_DIR
         value: "/app/.cache/puppeteer"
       - key: WHATSAPP_AUTH_DIR
-        value: "/app/auth_info"
+        value: "/var/data/auth_info"
     disk:
       name: auth-info
-      mountPath: /app/auth_info
+      mountPath: /var/data/auth_info
       sizeGB: 1
