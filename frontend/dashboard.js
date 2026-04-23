@@ -62,7 +62,8 @@ async function pollStatus() {
       badge.className = 'badge badge-red';
       badge.textContent = 'Disconnected';
       body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> Not connected. Click Reconnect to start.</div>`;
-      clearInterval(qrInterval); qrInterval = null;
+      await loadQR();
+      if (!qrInterval) qrInterval = setInterval(loadQR, 10000);
     }
   } catch(e) {}
 }
