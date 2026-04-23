@@ -33,6 +33,7 @@ router.post('/disconnect', async (req, res) => {
 // POST /api/whatsapp/reconnect
 router.post('/reconnect', async (req, res) => {
   try {
+    await disconnectSession(req.user.id);
     await initSession(req.user.id);
     res.json({ message: 'Reconnecting...' });
   } catch (err) {

@@ -13,7 +13,20 @@ const MAX_RETRIES = 5;
 const pendingActions = new Map();
 const messageHandlers = new Map();
 
-const AUTH_DIR = path.join(__dirname, 'auth_info');
+const AUTH_DIR =
+  process.env.WHATSAPP_AUTH_DIR ||
+  (process.env.RENDER ? '/app/auth_info' : path.join(__dirname, 'auth_info'));
+
+function getSessionDir(userId) {
+  return path.join(AUTH_DIR, `session-${userId}`);
+}
+
+function clearSessionFiles(userId) {
+  const sessionDir = getSessionDir(userId);
+  if (fs.existsSync(sessionDir)) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+}
 
 async function initSession(userId) {
   const current = statuses.get(userId);
@@ -71,6 +84,19 @@ async function initSession(userId) {
     sessions.delete(userId);
     qrCodes.delete(userId);
     console.error(`❌ [WA:${userId}] Auth failure: ${msg}`);
+
+    // Remove stale auth and retry so a fresh QR can be generated.
+    clearSessionFiles(userId);
+    const attempts = (retryCount.get(userId) || 0) + 1;
+    retryCount.set(userId, attempts);
+    if (attempts < MAX_RETRIES) {
+      const delay = Math.min(5000 * attempts, 30000);
+      console.log(`🔄 [WA:${userId}] Retrying from a clean auth state in ${delay / 1000}s...`);
+      setTimeout(() => initSession(userId), delay);
+    } else {
+      console.error(`❌ [WA:${userId}] Max retries reached after auth failure. Manual reconnect required.`);
+      retryCount.set(userId, 0);
+    }
   });
 
   client.on('disconnected', (reason) => {
@@ -155,11 +181,8 @@ async function disconnectSession(userId) {
   }
   qrCodes.delete(userId);
   statuses.set(userId, 'disconnected');
-
-  const sessionDir = path.join(AUTH_DIR, `session-${userId}`);
-  if (fs.existsSync(sessionDir)) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-  }
+  retryCount.set(userId, 0);
+  clearSessionFiles(userId);
 
   console.log(`🗑️ [WA:${userId}] Session cleared`);
 }

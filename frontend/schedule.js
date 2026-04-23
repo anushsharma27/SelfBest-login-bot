@@ -38,7 +38,7 @@ async function renderSchedule() {
         </div>
         <div>
           <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Clock-Out Message</label>
-          <textarea id="out-msg" rows="2" placeholder="e.g. out"
+          <textarea id="out-msg" rows="2" placeholder="e.g. Clock Out"
             class="w-full bg-slate-800/60 border border-slate-600/50 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 transition resize-none"></textarea>
           <p class="text-xs text-slate-500 mt-1">This is the exact keyword your company bot expects</p>
         </div>
@@ -112,13 +112,14 @@ async function renderSchedule() {
       document.getElementById('clock-out').value = s.clock_out_time || '';
       ci.setAttribute('oninput', 'updateClockOut()');
       document.getElementById('in-msg').value = s.clock_in_message || '';
-      document.getElementById('out-msg').value = s.clock_out_message || '';
+      document.getElementById('out-msg').value = s.clock_out_message || 'Clock Out';
       document.getElementById('is-active').checked = !!s.is_active;
       let days = []; try { days = JSON.parse(s.days); } catch { }
       document.querySelectorAll('.day-check').forEach(cb => {
         if (days.includes(cb.value)) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
       });
     } else {
+      document.getElementById('out-msg').value = 'Clock Out';
       // Default Mon-Fri checked
       document.querySelectorAll('.day-check').forEach(cb => {
         if (['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(cb.value)) { cb.checked = true; cb.dispatchEvent(new Event('change')); }

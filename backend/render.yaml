@@ -22,6 +22,8 @@ services:
         value: "false"
       - key: PUPPETEER_CACHE_DIR
         value: "/app/.cache/puppeteer"
+      - key: WHATSAPP_AUTH_DIR
+        value: "/app/auth_info"
     disk:
       name: auth-info
       mountPath: /app/auth_info
