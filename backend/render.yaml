@@ -20,6 +20,8 @@ services:
         value: "3000"
       - key: PUPPETEER_CACHE_DIR
         value: "/opt/render/.cache/puppeteer"
+      - key: DBUS_SESSION_BUS_ADDRESS
+        value: "disabled:"
       - key: WA_HEADLESS
         value: "true"
       - key: WHATSAPP_AUTH_DIR

@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { getQR, getStatus, getSessionHealth, ensureSession, disconnectSession, reconnectSession } = require('../whatsapp');
+const { getQR, getStatus, getSessionHealth, ensureSession, disconnectSession, reconnectSession, clearServerAuth } = require('../whatsapp');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -41,6 +41,17 @@ router.post('/reconnect', async (req, res) => {
   } catch (err) {
     console.error('Reconnect error:', err);
     res.status(500).json({ error: err.message || 'Failed to reconnect' });
+  }
+});
+
+// POST /api/whatsapp/clear-auth
+router.post('/clear-auth', async (req, res) => {
+  try {
+    await clearServerAuth(req.user.id);
+    res.json({ message: 'Server auth cleared successfully' });
+  } catch (err) {
+    console.error('Clear auth error:', err);
+    res.status(500).json({ error: err.message || 'Failed to clear server auth' });
   }
 });
 

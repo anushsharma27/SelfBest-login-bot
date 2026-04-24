@@ -15,6 +15,7 @@ async function renderDashboard() {
       <div class="flex gap-3 mt-4">
         <button onclick="waReconnect()" class="btn-primary text-white text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-2"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
         <button onclick="waDisconnect()" class="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-link-slash"></i> Disconnect</button>
+        <button onclick="waClearAuth()" class="bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-trash-can"></i> Delete Server Auth</button>
       </div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -138,6 +139,15 @@ async function waDisconnect() {
   try {
     stopWALoop();
     await apiFetch('/api/whatsapp/disconnect',{method:'POST'});
+    await pollStatus();
+  } catch(e){alert(e.message);}
+}
+
+async function waClearAuth() {
+  if (!confirm('Delete saved WhatsApp auth on the server? You will need to scan a fresh QR after this.')) return;
+  try {
+    stopWALoop();
+    await apiFetch('/api/whatsapp/clear-auth', { method:'POST' });
     await pollStatus();
   } catch(e){alert(e.message);}
 }

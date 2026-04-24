@@ -143,6 +143,10 @@ function buildPuppeteerConfig() {
     ...(executablePath ? { executablePath } : {}),
     headless,
     dumpio: isRender,
+    env: {
+      ...process.env,
+      DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || 'disabled:'
+    },
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -150,7 +154,11 @@ function buildPuppeteerConfig() {
       '--disable-gpu',
       '--no-first-run',
       '--no-zygote',
-      '--disable-features=Translate,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion'
+      '--disable-features=Translate,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-domain-reliability',
+      '--disable-sync'
     ]
   };
 }
@@ -371,6 +379,11 @@ async function reconnectSession(userId) {
   );
 }
 
+async function clearServerAuth(userId) {
+  await disconnectSession(userId);
+  console.log(`🧹 [WA:${userId}] Server auth_info cleared`);
+}
+
 function ensureSession(userId) {
   const status = statuses.get(userId) || 'disconnected';
   const hasClient = sessions.has(userId);
@@ -416,6 +429,7 @@ module.exports = {
   sendMessage,
   disconnectSession,
   reconnectSession,
+  clearServerAuth,
   ensureSession,
   registerMessageHandler,
   getPendingAction,
