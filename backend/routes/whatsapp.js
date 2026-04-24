@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
-const { getQR, getStatus, disconnectSession, reconnectSession } = require('../whatsapp');
+const { getQR, getStatus, getSessionHealth, ensureSession, disconnectSession, reconnectSession } = require('../whatsapp');
 
 const router = express.Router();
 
@@ -9,15 +9,19 @@ router.use(requireAuth);
 
 // GET /api/whatsapp/qr
 router.get('/qr', (req, res) => {
+  ensureSession(req.user.id);
   const qr = getQR(req.user.id);
-  res.json({ qr });
+  const { status, manuallyDisconnected } = getSessionHealth(req.user.id);
+  res.json({ qr, status, manuallyDisconnected });
 });
 
 // GET /api/whatsapp/status
 router.get('/status', (req, res) => {
+  ensureSession(req.user.id);
   const status = getStatus(req.user.id);
   const qr = getQR(req.user.id);
-  res.json({ status, qr });
+  const { hasClient, manuallyDisconnected } = getSessionHealth(req.user.id);
+  res.json({ status, qr, hasClient, manuallyDisconnected });
 });
 
 // POST /api/whatsapp/disconnect

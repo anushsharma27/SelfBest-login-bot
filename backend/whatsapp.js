@@ -10,8 +10,10 @@ const statuses = new Map();
 const retryCount = new Map();
 const retryTimers = new Map();
 const launchLocks = new Set();
+const manualDisconnects = new Set();
 
 const MAX_RETRIES = 5;
+const WEB_VERSION = '2.3000.1037968143';
 
 const pendingActions = new Map();
 const messageHandlers = new Map();
@@ -42,6 +44,40 @@ function ensureAuthDir() {
   throw new Error(`No writable auth directory found. Tried: ${AUTH_DIR_CANDIDATES.join(', ')}`);
 }
 
+function resolveChromeExecutablePath() {
+  const candidates = [];
+
+  const bundledPath = puppeteer.executablePath();
+  if (bundledPath) candidates.push(bundledPath);
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    candidates.push(process.env.PUPPETEER_EXECUTABLE_PATH);
+  }
+
+  if (!process.env.RENDER) {
+    candidates.push(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium'
+    );
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (process.env.RENDER) {
+    throw new Error(`No Chrome executable found. Bundled path was ${bundledPath || 'unset'}.`);
+  }
+
+  return undefined;
+}
+
 function getSessionDir(userId) {
   return path.join(ensureAuthDir(), `session-${userId}`);
 }
@@ -61,7 +97,17 @@ function clearRetryTimer(userId) {
   }
 }
 
+function getSessionHealth(userId) {
+  return {
+    status: statuses.get(userId) || 'disconnected',
+    hasClient: sessions.has(userId),
+    hasQR: qrCodes.has(userId),
+    manuallyDisconnected: manualDisconnects.has(userId)
+  };
+}
+
 function scheduleReconnect(userId, delay, reason) {
+  if (manualDisconnects.has(userId)) return;
   clearRetryTimer(userId);
   retryTimers.set(userId, setTimeout(() => {
     retryTimers.delete(userId);
@@ -87,6 +133,7 @@ async function initSession(userId) {
   const current = statuses.get(userId);
   if (current === 'connected' || current === 'initializing' || launchLocks.has(userId)) return;
 
+  manualDisconnects.delete(userId);
   launchLocks.add(userId);
   clearRetryTimer(userId);
   await closeExistingClient(userId);
@@ -95,16 +142,22 @@ async function initSession(userId) {
   qrCodes.delete(userId);
 
   const authDir = ensureAuthDir();
-  const executablePath = puppeteer.executablePath();
-  console.log(`🔧 [WA:${userId}] Using Chrome executable: ${executablePath}`);
+  const executablePath = resolveChromeExecutablePath();
+  console.log(`🔧 [WA:${userId}] Using Chrome executable: ${executablePath || '(puppeteer default)'}`);
 
   const client = new Client({
     authStrategy: new LocalAuth({
       clientId: String(userId),
       dataPath: authDir
     }),
+    webVersion: WEB_VERSION,
+    webVersionCache: {
+      type: 'local',
+      path: path.join(__dirname, '.wwebjs_cache'),
+      strict: true
+    },
     puppeteer: {
-      executablePath,
+      ...(executablePath ? { executablePath } : {}),
       headless: 'new',
       dumpio: !!process.env.RENDER,
       args: [
@@ -131,14 +184,31 @@ async function initSession(userId) {
     }
   });
 
+  client.on('loading_screen', (percent, message) => {
+    statuses.set(userId, 'loading');
+    console.log(`⏳ [WA:${userId}] Loading screen ${percent}% - ${message}`);
+  });
+
+  client.on('change_state', (state) => {
+    console.log(`🔁 [WA:${userId}] State changed: ${state}`);
+    if (state === 'CONNECTED') {
+      statuses.set(userId, 'loading');
+    }
+    if (state === 'UNPAIRED' || state === 'UNPAIRED_IDLE') {
+      statuses.set(userId, 'connecting');
+    }
+  });
+
   client.on('ready', () => {
     statuses.set(userId, 'connected');
     qrCodes.delete(userId);
     retryCount.set(userId, 0);
+    manualDisconnects.delete(userId);
     console.log(`✅ [WA:${userId}] Connected and ready`);
   });
 
   client.on('authenticated', () => {
+    statuses.set(userId, 'loading');
     console.log(`🔐 [WA:${userId}] Authenticated`);
   });
 
@@ -239,6 +309,7 @@ async function sendMessage(userId, number, message) {
 }
 
 async function disconnectSession(userId) {
+  manualDisconnects.add(userId);
   clearRetryTimer(userId);
   const client = sessions.get(userId);
   if (client) {
@@ -259,13 +330,41 @@ async function disconnectSession(userId) {
 
 async function reconnectSession(userId) {
   await disconnectSession(userId);
+  manualDisconnects.delete(userId);
+  statuses.set(userId, 'initializing');
+  qrCodes.delete(userId);
 
   // Let puppeteer and the old LocalAuth cleanup settle before starting again.
-  setTimeout(() => {
+  retryTimers.set(userId, setTimeout(() => {
+    retryTimers.delete(userId);
     initSession(userId).catch((err) => {
       console.error(`❌ [WA:${userId}] Background reconnect failed:`, err.message);
     });
-  }, 1000);
+  }, 1200));
+}
+
+function ensureSession(userId) {
+  const status = statuses.get(userId) || 'disconnected';
+  const hasClient = sessions.has(userId);
+  const hasQR = qrCodes.has(userId);
+
+  if (manualDisconnects.has(userId)) return getSessionHealth(userId);
+  if (status === 'connected' || status === 'initializing' || status === 'loading' || launchLocks.has(userId)) {
+    return getSessionHealth(userId);
+  }
+  if (status === 'connecting' && hasQR) {
+    return getSessionHealth(userId);
+  }
+  if (status === 'connecting' && !hasQR && hasClient) {
+    return getSessionHealth(userId);
+  }
+
+  statuses.set(userId, 'initializing');
+  initSession(userId).catch((err) => {
+    console.error(`❌ [WA:${userId}] Auto-start failed:`, err.message);
+  });
+
+  return getSessionHealth(userId);
 }
 
 function registerMessageHandler(pattern, handler) {
@@ -288,9 +387,11 @@ module.exports = {
   initSession,
   getQR,
   getStatus,
+  getSessionHealth,
   sendMessage,
   disconnectSession,
   reconnectSession,
+  ensureSession,
   registerMessageHandler,
   getPendingAction,
   setPendingAction,

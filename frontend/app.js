@@ -72,6 +72,10 @@ async function pollStatus() {
       badge.className = 'badge badge-yellow';
       badge.textContent = 'Connecting…';
       loadQR();
+    } else if (status === 'loading') {
+      badge.className = 'badge badge-blue';
+      badge.textContent = 'Loading…';
+      body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> WhatsApp Web is loading…</div>`;
     } else {
       badge.className = 'badge badge-red';
       badge.textContent = 'Disconnected';
