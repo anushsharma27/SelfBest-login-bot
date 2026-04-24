@@ -13,6 +13,7 @@ const launchLocks = new Set();
 const manualDisconnects = new Set();
 const pendingActions = new Map();
 const messageHandlers = new Map();
+const sessionMeta = new Map();
 
 const MAX_RETRIES = 5;
 
@@ -70,6 +71,13 @@ function getSessionHealth(userId) {
   };
 }
 
+function markSessionStage(userId, stage, extra = '') {
+  const startedAt = sessionMeta.get(userId)?.startedAt || Date.now();
+  sessionMeta.set(userId, { startedAt, stage });
+  const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  console.log(`🧭 [WA:${userId}] ${stage}${extra ? ` | ${extra}` : ''} | +${elapsed}s`);
+}
+
 function scheduleReconnect(userId, delay, reason, options = {}) {
   if (manualDisconnects.has(userId)) return;
 
@@ -90,6 +98,7 @@ async function closeExistingClient(userId) {
   if (!client) return;
 
   try {
+    markSessionStage(userId, 'Destroying existing client');
     await client.destroy();
   } catch (err) {
     console.warn(`⚠️  [WA:${userId}] Error while closing session: ${err.message}`);
@@ -176,14 +185,18 @@ async function initSession(userId, options = {}) {
   clearRetryTimer(userId);
   qrCodes.delete(userId);
   statuses.set(userId, 'initializing');
+  sessionMeta.set(userId, { startedAt: Date.now(), stage: 'initializing' });
+  markSessionStage(userId, 'Initializing session', `forceFresh=${forceFresh}`);
 
   await closeExistingClient(userId);
   if (forceFresh) {
+    markSessionStage(userId, 'Clearing saved auth');
     clearSessionFiles(userId);
   }
 
   try {
     const authDir = ensureAuthDir();
+    markSessionStage(userId, 'Auth directory ready', authDir);
     const client = new Client({
       authStrategy: new LocalAuth({
         clientId: String(userId),
@@ -196,6 +209,7 @@ async function initSession(userId, options = {}) {
       restartOnAuthFail: false,
       puppeteer: buildPuppeteerConfig()
     });
+    markSessionStage(userId, 'Client created');
 
     client.on('qr', async (qr) => {
       try {
@@ -203,6 +217,7 @@ async function initSession(userId, options = {}) {
         qrCodes.set(userId, qrBase64);
         statuses.set(userId, 'connecting');
         retryCount.set(userId, 0);
+        markSessionStage(userId, 'QR generated');
         console.log(`📱 [WA:${userId}] QR code generated`);
       } catch (err) {
         console.error(`❌ [WA:${userId}] QR generation error: ${err.message}`);
@@ -211,11 +226,13 @@ async function initSession(userId, options = {}) {
 
     client.on('loading_screen', (percent, message) => {
       statuses.set(userId, 'loading');
+      markSessionStage(userId, 'Loading screen', `${percent}% ${message}`);
       console.log(`⏳ [WA:${userId}] Loading ${percent}% - ${message}`);
     });
 
     client.on('authenticated', () => {
       statuses.set(userId, 'loading');
+      markSessionStage(userId, 'Authenticated');
       console.log(`🔐 [WA:${userId}] Authenticated`);
     });
 
@@ -224,6 +241,7 @@ async function initSession(userId, options = {}) {
       qrCodes.delete(userId);
       retryCount.set(userId, 0);
       manualDisconnects.delete(userId);
+      markSessionStage(userId, 'Ready');
       console.log(`✅ [WA:${userId}] Connected and ready`);
     });
 
@@ -232,6 +250,7 @@ async function initSession(userId, options = {}) {
     });
 
     client.on('change_state', (state) => {
+      markSessionStage(userId, 'State changed', state);
       console.log(`🔁 [WA:${userId}] State changed: ${state}`);
       if (state === 'CONNECTED') {
         statuses.set(userId, 'loading');
@@ -242,6 +261,7 @@ async function initSession(userId, options = {}) {
       sessions.delete(userId);
       statuses.set(userId, 'disconnected');
       qrCodes.delete(userId);
+      markSessionStage(userId, 'Auth failure', message);
       console.error(`❌ [WA:${userId}] Auth failure: ${message}`);
 
       clearSessionFiles(userId);
@@ -262,6 +282,7 @@ async function initSession(userId, options = {}) {
       sessions.delete(userId);
       statuses.set(userId, 'disconnected');
       qrCodes.delete(userId);
+      markSessionStage(userId, 'Disconnected', String(reason || 'unknown'));
       console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
 
       if (manualDisconnects.has(userId)) return;
@@ -302,7 +323,24 @@ async function initSession(userId, options = {}) {
     });
 
     sessions.set(userId, client);
+    markSessionStage(userId, 'Calling client.initialize()');
     await client.initialize();
+    markSessionStage(userId, 'client.initialize() resolved');
+
+    if (client.pupPage) {
+      client.pupPage.on('error', (err) => {
+        console.error(`❌ [WA:${userId}] Page crashed: ${err?.message || err}`);
+      });
+      client.pupPage.on('pageerror', (err) => {
+        console.error(`❌ [WA:${userId}] Page error: ${err?.message || err}`);
+      });
+      client.pupPage.on('framenavigated', (frame) => {
+        const url = frame?.url?.();
+        if (url) {
+          console.log(`🌐 [WA:${userId}] Frame navigated: ${url}`);
+        }
+      });
+    }
   } catch (err) {
     sessions.delete(userId);
     qrCodes.delete(userId);
@@ -311,6 +349,7 @@ async function initSession(userId, options = {}) {
     const attempts = (retryCount.get(userId) || 0) + 1;
     retryCount.set(userId, attempts);
 
+    markSessionStage(userId, 'Init error', err.message);
     console.error(`❌ [WA:${userId}] Init error: ${err.message}`);
 
     if (attempts < MAX_RETRIES) {
@@ -356,6 +395,7 @@ async function disconnectSession(userId) {
   qrCodes.delete(userId);
   statuses.set(userId, 'disconnected');
   retryCount.set(userId, 0);
+  markSessionStage(userId, 'Manual disconnect requested');
 
   await closeExistingClient(userId);
   clearSessionFiles(userId);
@@ -367,6 +407,8 @@ async function reconnectSession(userId) {
   await disconnectSession(userId);
   manualDisconnects.delete(userId);
   statuses.set(userId, 'initializing');
+  sessionMeta.set(userId, { startedAt: Date.now(), stage: 'reconnecting' });
+  markSessionStage(userId, 'Reconnect queued');
 
   retryTimers.set(
     userId,

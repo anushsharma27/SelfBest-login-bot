@@ -10,6 +10,7 @@ const sentToday = new Set(); // key = "scheduleId-date-type"
 
 // Track last clock-in/out trigger time per schedule to prevent duplicates within a short window
 const lastTriggerTime = new Map(); // scheduleId → timestamp (ms)
+const WARMUP_INTERVAL_MS = parseInt(process.env.WA_WARMUP_INTERVAL_MS || '15000', 10);
 
  // Clear at midnight every day
 cron.schedule('0 0 * * *', () => {
@@ -23,12 +24,16 @@ cron.schedule('0 0 * * *', () => {
 async function loadSchedules() {
   try {
     const result = await db.execute(`SELECT user_id FROM schedules WHERE is_active = 1`);
-    for (const row of result.rows) {
-      console.log(`🔄 Warming up WhatsApp session for user ${row.user_id}`);
-      initSession(row.user_id).catch((err) => {
-        console.error(`⚠️  Failed to init session for user ${row.user_id}:`, err.message);
-      });
-    }
+    result.rows.forEach((row, index) => {
+      const delay = index * WARMUP_INTERVAL_MS;
+      console.log(`🔄 Queueing WhatsApp warmup for user ${row.user_id} in ${Math.round(delay / 1000)}s`);
+      setTimeout(() => {
+        console.log(`🚀 Starting WhatsApp warmup for user ${row.user_id}`);
+        initSession(row.user_id).catch((err) => {
+          console.error(`⚠️  Failed to init session for user ${row.user_id}:`, err.message);
+        });
+      }, delay);
+    });
     console.log(`✅ Loaded ${result.rows.length} active schedule(s)`);
   } catch (err) {
     console.error('⚠️  Error loading schedules:', err.message);
