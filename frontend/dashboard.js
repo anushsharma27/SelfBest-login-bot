@@ -51,7 +51,7 @@ function startWALoop() {
 
 async function pollStatus() {
   try {
-    const { status, qr, manuallyDisconnected } = await apiFetch('/api/whatsapp/status');
+    const { status, qr, manuallyDisconnected, configured, mode } = await apiFetch('/api/whatsapp/status');
     const badge = document.getElementById('wa-badge');
     const body = document.getElementById('wa-body');
     if (!badge || !body) return;
@@ -59,7 +59,7 @@ async function pollStatus() {
       badge.className = 'badge badge-green';
       badge.innerHTML = '<span class="pulse-dot inline-block w-2 h-2 bg-green-400 rounded-full mr-1.5"></span>Connected';
       body.innerHTML = `<div class="flex items-center gap-3 text-green-400"><i class="fa-solid fa-circle-check text-3xl"></i>
-        <div><div class="font-semibold text-white">Connected & Ready</div><div class="text-sm text-slate-400">Messages will send automatically</div></div></div>`;
+        <div><div class="font-semibold text-white">Connected & Ready</div><div class="text-sm text-slate-400">Messages will send automatically from your WhatsApp</div><div class="text-xs text-slate-500 mt-1">${mode === 'webjs' ? 'Mode: QR Login' : ''}</div></div></div>`;
       stopWALoop();
     } else if (status === 'initializing') {
       badge.className = 'badge badge-yellow';
@@ -69,17 +69,17 @@ async function pollStatus() {
     } else if (status === 'loading') {
       badge.className = 'badge badge-blue';
       badge.textContent = 'Loading…';
-      body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> WhatsApp Web is loading…</div>`;
+      body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Restoring WhatsApp session…</div>`;
       startWALoop();
     } else if (status === 'connecting') {
       badge.className = 'badge badge-yellow';
-      badge.textContent = 'Connecting…';
-      renderQR(qr, { manuallyDisconnected, status });
+      badge.textContent = 'Scan QR';
+      renderQR(qr, { manuallyDisconnected, status, configured });
       startWALoop();
     } else {
       badge.className = 'badge badge-red';
-      badge.textContent = 'Disconnected';
-      renderQR(qr, { manuallyDisconnected, status });
+      badge.textContent = manuallyDisconnected ? 'Disconnected' : 'Disconnected';
+      renderQR(qr, { manuallyDisconnected, status, configured });
       if (manuallyDisconnected) stopWALoop();
       else startWALoop();
     }
@@ -88,33 +88,31 @@ async function pollStatus() {
 
 async function loadQR() {
   try {
-    const { qr, status, manuallyDisconnected } = await apiFetch('/api/whatsapp/qr');
-    renderQR(qr, { status, manuallyDisconnected });
+    const { qr, status, manuallyDisconnected, configured } = await apiFetch('/api/whatsapp/qr');
+    renderQR(qr, { status, manuallyDisconnected, configured });
   } catch(e) {}
 }
 
-function renderQR(qr, { status, manuallyDisconnected } = {}) {
+function renderQR(qr, { status, manuallyDisconnected, configured } = {}) {
   const body = document.getElementById('wa-body');
   if (!body) return;
   if (!qr && manuallyDisconnected) {
     body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> WhatsApp is disconnected. Click Reconnect to generate a fresh QR.</div>`;
     return;
   }
-
   if (!qr && status && status !== 'connecting' && status !== 'disconnected') {
-    body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Preparing WhatsApp session…</div>`;
+    body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Preparing WhatsApp login…</div>`;
     return;
   }
-
   body.innerHTML = qr
     ? `<div class="flex flex-col sm:flex-row items-center gap-6">
         <img src="${qr}" alt="QR" class="w-44 h-44 rounded-xl border-2 border-brand-500/30"/>
         <div class="text-sm text-slate-400 space-y-1.5">
           <div class="font-semibold text-white mb-2">Scan to connect WhatsApp</div>
-          <div><span class="text-brand-400 font-bold">1.</span> Open WhatsApp</div>
-          <div><span class="text-brand-400 font-bold">2.</span> ⋮ → Linked Devices</div>
+          <div><span class="text-brand-400 font-bold">1.</span> Open WhatsApp on your phone</div>
+          <div><span class="text-brand-400 font-bold">2.</span> Linked Devices</div>
           <div><span class="text-brand-400 font-bold">3.</span> Link a Device → Scan QR</div>
-          <div class="text-xs text-slate-600 mt-2">Auto-refreshes every few seconds</div>
+          <div class="text-xs text-slate-600 mt-2">This QR refreshes automatically</div>
         </div></div>`
     : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Generating QR…</div>`;
 }

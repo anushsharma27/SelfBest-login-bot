@@ -1,6 +1,6 @@
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const API_URL = '';
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v5';
 let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user') || 'null');
 let pollInterval = null, logsInterval = null, qrInterval = null;

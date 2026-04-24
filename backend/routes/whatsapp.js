@@ -3,8 +3,6 @@ const { requireAuth } = require('../middleware/auth');
 const { getQR, getStatus, getSessionHealth, ensureSession, disconnectSession, reconnectSession } = require('../whatsapp');
 
 const router = express.Router();
-
-// All routes require authentication
 router.use(requireAuth);
 
 // GET /api/whatsapp/qr
@@ -21,7 +19,7 @@ router.get('/status', (req, res) => {
   const status = getStatus(req.user.id);
   const qr = getQR(req.user.id);
   const { hasClient, manuallyDisconnected } = getSessionHealth(req.user.id);
-  res.json({ status, qr, hasClient, manuallyDisconnected });
+  res.json({ status, qr, hasClient, manuallyDisconnected, mode: 'webjs', configured: true });
 });
 
 // POST /api/whatsapp/disconnect

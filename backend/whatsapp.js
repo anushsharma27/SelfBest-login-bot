@@ -70,38 +70,6 @@ function getSessionHealth(userId) {
   };
 }
 
-function resolveChromeExecutablePath() {
-  const candidates = [];
-
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    candidates.push(process.env.PUPPETEER_EXECUTABLE_PATH);
-  }
-
-  try {
-    const bundled = puppeteer.executablePath();
-    if (bundled) candidates.push(bundled);
-  } catch (err) {
-    // ignore and continue to system fallbacks
-  }
-
-  candidates.push(
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium'
-  );
-
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
 function scheduleReconnect(userId, delay, reason, options = {}) {
   if (manualDisconnects.has(userId)) return;
 
@@ -111,7 +79,7 @@ function scheduleReconnect(userId, delay, reason, options = {}) {
     setTimeout(() => {
       retryTimers.delete(userId);
       initSession(userId, options).catch((err) => {
-        console.error(`❌ [WA:${userId}] ${reason} reconnect failed:`, err.message);
+        console.error(`❌ [WA:${userId}] ${reason} reconnect failed: ${err.message}`);
       });
     }, delay)
   );
@@ -130,16 +98,50 @@ async function closeExistingClient(userId) {
   sessions.delete(userId);
 }
 
+function resolveChromeExecutablePath() {
+  const candidates = [];
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    candidates.push(process.env.PUPPETEER_EXECUTABLE_PATH);
+  }
+
+  try {
+    const bundled = puppeteer.executablePath();
+    if (bundled) candidates.push(bundled);
+  } catch (err) {
+    // ignore
+  }
+
+  if (!process.env.RENDER) {
+    candidates.push(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium'
+    );
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 function buildPuppeteerConfig() {
   const executablePath = resolveChromeExecutablePath();
   const isRender = !!process.env.RENDER;
-  const shouldShowBrowser = process.env.WA_HEADLESS === 'false' || (!isRender && process.env.WA_HEADLESS !== 'true');
+  const headless = process.env.WA_HEADLESS === 'false' ? false : 'new';
 
-  console.log(`🔧 [WA] Chrome executable: ${executablePath || '(default)'} | headless: ${shouldShowBrowser ? 'false' : 'new'}`);
+  console.log(`🔧 [WA] Chrome executable: ${executablePath || '(default)'} | headless: ${headless}`);
 
   return {
     ...(executablePath ? { executablePath } : {}),
-    headless: shouldShowBrowser ? false : 'new',
+    headless,
     dumpio: isRender,
     args: [
       '--no-sandbox',
@@ -179,6 +181,11 @@ async function initSession(userId, options = {}) {
         clientId: String(userId),
         dataPath: authDir
       }),
+      takeoverOnConflict: true,
+      takeoverTimeoutMs: 0,
+      authTimeoutMs: 60000,
+      qrMaxRetries: 0,
+      restartOnAuthFail: false,
       puppeteer: buildPuppeteerConfig()
     });
 
@@ -212,7 +219,19 @@ async function initSession(userId, options = {}) {
       console.log(`✅ [WA:${userId}] Connected and ready`);
     });
 
+    client.on('remote_session_saved', () => {
+      console.log(`💾 [WA:${userId}] Remote session saved`);
+    });
+
+    client.on('change_state', (state) => {
+      console.log(`🔁 [WA:${userId}] State changed: ${state}`);
+      if (state === 'CONNECTED') {
+        statuses.set(userId, 'loading');
+      }
+    });
+
     client.on('auth_failure', (message) => {
+      sessions.delete(userId);
       statuses.set(userId, 'disconnected');
       qrCodes.delete(userId);
       console.error(`❌ [WA:${userId}] Auth failure: ${message}`);
@@ -237,8 +256,11 @@ async function initSession(userId, options = {}) {
       qrCodes.delete(userId);
       console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
 
-      if (manualDisconnects.has(userId)) {
-        return;
+      if (manualDisconnects.has(userId)) return;
+
+      const shouldResetAuth = String(reason || '').toLowerCase().includes('logout');
+      if (shouldResetAuth) {
+        clearSessionFiles(userId);
       }
 
       const attempts = (retryCount.get(userId) || 0) + 1;
@@ -247,7 +269,7 @@ async function initSession(userId, options = {}) {
       if (attempts < MAX_RETRIES) {
         const delay = Math.min(5000 * attempts, 30000);
         console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay / 1000}s...`);
-        scheduleReconnect(userId, delay, 'Disconnect');
+        scheduleReconnect(userId, delay, 'Disconnect', { forceFresh: shouldResetAuth });
       } else {
         console.error(`❌ [WA:${userId}] Max retries reached. Manual reconnect required.`);
         retryCount.set(userId, 0);
