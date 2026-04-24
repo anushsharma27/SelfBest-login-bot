@@ -18,10 +18,10 @@ services:
         value: "@Nush123"
       - key: PORT
         value: "3000"
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "false"
       - key: PUPPETEER_CACHE_DIR
         value: "/opt/render/project/src/backend/node_modules/.puppeteer_cache"
+      - key: WA_HEADLESS
+        value: "true"
       - key: WHATSAPP_AUTH_DIR
         value: "/var/data/auth_info"
     disk:

@@ -11,12 +11,10 @@ const retryCount = new Map();
 const retryTimers = new Map();
 const launchLocks = new Set();
 const manualDisconnects = new Set();
-
-const MAX_RETRIES = 5;
-const WEB_VERSION = '2.3000.1037968143';
-
 const pendingActions = new Map();
 const messageHandlers = new Map();
+
+const MAX_RETRIES = 5;
 
 const AUTH_DIR_CANDIDATES = [
   process.env.WHATSAPP_AUTH_DIR,
@@ -42,40 +40,6 @@ function ensureAuthDir() {
   }
 
   throw new Error(`No writable auth directory found. Tried: ${AUTH_DIR_CANDIDATES.join(', ')}`);
-}
-
-function resolveChromeExecutablePath() {
-  const candidates = [];
-
-  const bundledPath = puppeteer.executablePath();
-  if (bundledPath) candidates.push(bundledPath);
-
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    candidates.push(process.env.PUPPETEER_EXECUTABLE_PATH);
-  }
-
-  if (!process.env.RENDER) {
-    candidates.push(
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/usr/bin/google-chrome',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/chromium'
-    );
-  }
-
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  if (process.env.RENDER) {
-    throw new Error(`No Chrome executable found. Bundled path was ${bundledPath || 'unset'}.`);
-  }
-
-  return undefined;
 }
 
 function getSessionDir(userId) {
@@ -106,199 +70,223 @@ function getSessionHealth(userId) {
   };
 }
 
-function scheduleReconnect(userId, delay, reason) {
+function resolveChromeExecutablePath() {
+  const candidates = [];
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    candidates.push(process.env.PUPPETEER_EXECUTABLE_PATH);
+  }
+
+  try {
+    const bundled = puppeteer.executablePath();
+    if (bundled) candidates.push(bundled);
+  } catch (err) {
+    // ignore and continue to system fallbacks
+  }
+
+  candidates.push(
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium'
+  );
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function scheduleReconnect(userId, delay, reason, options = {}) {
   if (manualDisconnects.has(userId)) return;
+
   clearRetryTimer(userId);
-  retryTimers.set(userId, setTimeout(() => {
-    retryTimers.delete(userId);
-    initSession(userId).catch((err) => {
-      console.error(`❌ [WA:${userId}] ${reason} reconnect failed:`, err.message);
-    });
-  }, delay));
+  retryTimers.set(
+    userId,
+    setTimeout(() => {
+      retryTimers.delete(userId);
+      initSession(userId, options).catch((err) => {
+        console.error(`❌ [WA:${userId}] ${reason} reconnect failed:`, err.message);
+      });
+    }, delay)
+  );
 }
 
 async function closeExistingClient(userId) {
-  const existing = sessions.get(userId);
-  if (!existing) return;
+  const client = sessions.get(userId);
+  if (!client) return;
 
   try {
-    await existing.destroy();
+    await client.destroy();
   } catch (err) {
-    // ignore
+    console.warn(`⚠️  [WA:${userId}] Error while closing session: ${err.message}`);
   }
+
   sessions.delete(userId);
 }
 
-async function initSession(userId) {
+function buildPuppeteerConfig() {
+  const executablePath = resolveChromeExecutablePath();
+  const isRender = !!process.env.RENDER;
+  const shouldShowBrowser = process.env.WA_HEADLESS === 'false' || (!isRender && process.env.WA_HEADLESS !== 'true');
+
+  console.log(`🔧 [WA] Chrome executable: ${executablePath || '(default)'} | headless: ${shouldShowBrowser ? 'false' : 'new'}`);
+
+  return {
+    ...(executablePath ? { executablePath } : {}),
+    headless: shouldShowBrowser ? false : 'new',
+    dumpio: isRender,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-features=Translate,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion'
+    ]
+  };
+}
+
+async function initSession(userId, options = {}) {
+  const { forceFresh = false } = options;
   const current = statuses.get(userId);
-  if (current === 'connected' || current === 'initializing' || launchLocks.has(userId)) return;
+
+  if (!forceFresh && (current === 'connected' || current === 'initializing' || current === 'loading' || launchLocks.has(userId))) {
+    return;
+  }
 
   manualDisconnects.delete(userId);
   launchLocks.add(userId);
   clearRetryTimer(userId);
-  await closeExistingClient(userId);
-
-  statuses.set(userId, 'initializing');
   qrCodes.delete(userId);
+  statuses.set(userId, 'initializing');
 
-  const authDir = ensureAuthDir();
-  const executablePath = resolveChromeExecutablePath();
-  console.log(`🔧 [WA:${userId}] Using Chrome executable: ${executablePath || '(puppeteer default)'}`);
-
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: String(userId),
-      dataPath: authDir
-    }),
-    webVersion: WEB_VERSION,
-    webVersionCache: {
-      type: 'local',
-      path: path.join(__dirname, '.wwebjs_cache'),
-      strict: true
-    },
-    puppeteer: {
-      ...(executablePath ? { executablePath } : {}),
-      headless: 'new',
-      dumpio: !!process.env.RENDER,
-      env: {
-        ...process.env,
-        // Render doesn't provide a desktop DBus session; this avoids some noisy Chromium probes.
-        DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || 'disabled:'
-      },
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--disable-features=Translate,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion'
-      ]
-    }
-  });
-
-  client.on('qr', async (qr) => {
-    try {
-      const qrBase64 = await QRCode.toDataURL(qr);
-      qrCodes.set(userId, qrBase64);
-      statuses.set(userId, 'connecting');  // now visible to frontend as "Connecting"
-      retryCount.set(userId, 0);           // reset retries when we get a fresh QR
-      console.log(`📱 [WA:${userId}] QR code generated`);
-    } catch (err) {
-      console.error(`[WA:${userId}] QR generation error:`, err.message);
-    }
-  });
-
-  client.on('loading_screen', (percent, message) => {
-    statuses.set(userId, 'loading');
-    console.log(`⏳ [WA:${userId}] Loading screen ${percent}% - ${message}`);
-  });
-
-  client.on('change_state', (state) => {
-    console.log(`🔁 [WA:${userId}] State changed: ${state}`);
-    if (state === 'CONNECTED') {
-      statuses.set(userId, 'loading');
-    }
-    if (state === 'UNPAIRED' || state === 'UNPAIRED_IDLE') {
-      statuses.set(userId, 'connecting');
-    }
-  });
-
-  client.on('ready', () => {
-    statuses.set(userId, 'connected');
-    qrCodes.delete(userId);
-    retryCount.set(userId, 0);
-    manualDisconnects.delete(userId);
-    console.log(`✅ [WA:${userId}] Connected and ready`);
-  });
-
-  client.on('authenticated', () => {
-    statuses.set(userId, 'loading');
-    console.log(`🔐 [WA:${userId}] Authenticated`);
-  });
-
-  client.on('disconnected', async (reason) => {
-    statuses.set(userId, 'disconnected');
-    qrCodes.delete(userId);
-    console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
-    if (manualDisconnects.has(userId)) return;
-    console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
-    scheduleReconnect(userId, 5000, 'Disconnected');
-  });
-
-  client.on('change_battery', (batteryInfo) => {
-    console.log(`🔋 [WA:${userId}] Battery event`, batteryInfo);
-  });
-
-  client.on('auth_failure', (msg) => {
-    statuses.set(userId, 'disconnected');
-    qrCodes.delete(userId);
-    console.error(`❌ [WA:${userId}] Auth failure: ${msg}`);
-
-    // Remove stale auth and retry so a fresh QR can be generated.
+  await closeExistingClient(userId);
+  if (forceFresh) {
     clearSessionFiles(userId);
-    const attempts = (retryCount.get(userId) || 0) + 1;
-    retryCount.set(userId, attempts);
-    if (attempts < MAX_RETRIES) {
-      const delay = Math.min(5000 * attempts, 30000);
-      console.log(`🔄 [WA:${userId}] Retrying from a clean auth state in ${delay / 1000}s...`);
-      scheduleReconnect(userId, delay, 'Auth failure');
-    } else {
-      console.error(`❌ [WA:${userId}] Max retries reached after auth failure. Manual reconnect required.`);
-      retryCount.set(userId, 0);
-    }
-  });
-
-  client.on('message', (msg) => {
-    if (msg.fromMe) return;
-
-    const from = msg.from.replace('@c.us', '');
-    const body = msg.body || '';
-
-    console.log(`[WA:${userId}] 📩 From ${from}: "${body}"`);
-
-    for (const [pattern, handler] of messageHandlers) {
-      if (body.toLowerCase().includes(pattern.toLowerCase())) {
-        console.log(`[WA:${userId}] ✅ Matched: ${pattern}`);
-        handler(userId, from, body);
-      }
-    }
-  });
-
-  sessions.set(userId, client);
+  }
 
   try {
-    await client.initialize();
-    // Surface browser/page errors after initialization so Render logs show the real failure.
-    client.pupPage?.on('error', (err) => {
-      console.error(`❌ [WA:${userId}] Page crashed:`, err?.message || err);
+    const authDir = ensureAuthDir();
+    const client = new Client({
+      authStrategy: new LocalAuth({
+        clientId: String(userId),
+        dataPath: authDir
+      }),
+      puppeteer: buildPuppeteerConfig()
     });
-    client.pupPage?.on('pageerror', (err) => {
-      console.error(`❌ [WA:${userId}] Page error:`, err?.message || err);
-    });
-    client.pupPage?.on('framenavigated', (frame) => {
-      const url = frame?.url?.();
-      if (url && url.includes('post_logout=1')) {
-        console.log(`ℹ️ [WA:${userId}] Navigated to logout URL`);
+
+    client.on('qr', async (qr) => {
+      try {
+        const qrBase64 = await QRCode.toDataURL(qr);
+        qrCodes.set(userId, qrBase64);
+        statuses.set(userId, 'connecting');
+        retryCount.set(userId, 0);
+        console.log(`📱 [WA:${userId}] QR code generated`);
+      } catch (err) {
+        console.error(`❌ [WA:${userId}] QR generation error: ${err.message}`);
       }
     });
+
+    client.on('loading_screen', (percent, message) => {
+      statuses.set(userId, 'loading');
+      console.log(`⏳ [WA:${userId}] Loading ${percent}% - ${message}`);
+    });
+
+    client.on('authenticated', () => {
+      statuses.set(userId, 'loading');
+      console.log(`🔐 [WA:${userId}] Authenticated`);
+    });
+
+    client.on('ready', () => {
+      statuses.set(userId, 'connected');
+      qrCodes.delete(userId);
+      retryCount.set(userId, 0);
+      manualDisconnects.delete(userId);
+      console.log(`✅ [WA:${userId}] Connected and ready`);
+    });
+
+    client.on('auth_failure', (message) => {
+      statuses.set(userId, 'disconnected');
+      qrCodes.delete(userId);
+      console.error(`❌ [WA:${userId}] Auth failure: ${message}`);
+
+      clearSessionFiles(userId);
+      const attempts = (retryCount.get(userId) || 0) + 1;
+      retryCount.set(userId, attempts);
+
+      if (attempts < MAX_RETRIES) {
+        const delay = Math.min(5000 * attempts, 30000);
+        console.log(`🔄 [WA:${userId}] Retrying with fresh auth in ${delay / 1000}s...`);
+        scheduleReconnect(userId, delay, 'Auth failure', { forceFresh: true });
+      } else {
+        console.error(`❌ [WA:${userId}] Max retries reached after auth failure. Manual reconnect required.`);
+        retryCount.set(userId, 0);
+      }
+    });
+
+    client.on('disconnected', (reason) => {
+      sessions.delete(userId);
+      statuses.set(userId, 'disconnected');
+      qrCodes.delete(userId);
+      console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
+
+      if (manualDisconnects.has(userId)) {
+        return;
+      }
+
+      const attempts = (retryCount.get(userId) || 0) + 1;
+      retryCount.set(userId, attempts);
+
+      if (attempts < MAX_RETRIES) {
+        const delay = Math.min(5000 * attempts, 30000);
+        console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay / 1000}s...`);
+        scheduleReconnect(userId, delay, 'Disconnect');
+      } else {
+        console.error(`❌ [WA:${userId}] Max retries reached. Manual reconnect required.`);
+        retryCount.set(userId, 0);
+      }
+    });
+
+    client.on('message', (msg) => {
+      if (msg.fromMe) return;
+
+      const from = (msg.from || '').replace('@c.us', '');
+      const body = (msg.body || '').trim();
+      if (!body) return;
+
+      console.log(`[WA:${userId}] 📩 From ${from}: "${body}"`);
+
+      for (const [pattern, handler] of messageHandlers.entries()) {
+        if (body.toLowerCase().includes(pattern.toLowerCase())) {
+          console.log(`[WA:${userId}] ✅ Matched: ${pattern}`);
+          handler(userId, from, body);
+        }
+      }
+    });
+
+    sessions.set(userId, client);
+    await client.initialize();
   } catch (err) {
-    console.error(`❌ [WA:${userId}] Init error:`, err.message);
-    statuses.set(userId, 'disconnected');
-    qrCodes.delete(userId);
-    try {
-      await client.destroy();
-    } catch (destroyErr) {
-      // ignore
-    }
     sessions.delete(userId);
+    qrCodes.delete(userId);
+    statuses.set(userId, 'disconnected');
+
     const attempts = (retryCount.get(userId) || 0) + 1;
     retryCount.set(userId, attempts);
+
+    console.error(`❌ [WA:${userId}] Init error: ${err.message}`);
+
     if (attempts < MAX_RETRIES) {
-      const delay = Math.min(5000 * attempts, 30000); // backoff: 5s, 10s, 15s…
-      console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay/1000}s…`);
-      scheduleReconnect(userId, delay, 'Init');
+      const delay = Math.min(5000 * attempts, 30000);
+      console.log(`🔄 [WA:${userId}] Retry ${attempts}/${MAX_RETRIES} in ${delay / 1000}s...`);
+      scheduleReconnect(userId, delay, 'Init', { forceFresh });
     } else {
       console.error(`❌ [WA:${userId}] Max retries reached. Manual reconnect required.`);
       retryCount.set(userId, 0);
@@ -327,8 +315,7 @@ async function sendMessage(userId, number, message) {
     throw new Error(`WhatsApp not connected for user ${userId}. Status: ${statuses.get(userId)}`);
   }
 
-  const chatId = `${number}@c.us`;
-
+  const chatId = number.includes('@') ? number : `${number}@c.us`;
   await client.sendMessage(chatId, message);
   console.log(`📤 [WA:${userId}] Sent "${message}" to ${number}`);
 }
@@ -336,18 +323,11 @@ async function sendMessage(userId, number, message) {
 async function disconnectSession(userId) {
   manualDisconnects.add(userId);
   clearRetryTimer(userId);
-  const client = sessions.get(userId);
-  if (client) {
-    try {
-      await client.destroy();
-    } catch (err) {
-      // ignore
-    }
-    sessions.delete(userId);
-  }
   qrCodes.delete(userId);
   statuses.set(userId, 'disconnected');
   retryCount.set(userId, 0);
+
+  await closeExistingClient(userId);
   clearSessionFiles(userId);
 
   console.log(`🗑️ [WA:${userId}] Session cleared`);
@@ -357,15 +337,16 @@ async function reconnectSession(userId) {
   await disconnectSession(userId);
   manualDisconnects.delete(userId);
   statuses.set(userId, 'initializing');
-  qrCodes.delete(userId);
 
-  // Let puppeteer and the old LocalAuth cleanup settle before starting again.
-  retryTimers.set(userId, setTimeout(() => {
-    retryTimers.delete(userId);
-    initSession(userId).catch((err) => {
-      console.error(`❌ [WA:${userId}] Background reconnect failed:`, err.message);
-    });
-  }, 1200));
+  retryTimers.set(
+    userId,
+    setTimeout(() => {
+      retryTimers.delete(userId);
+      initSession(userId, { forceFresh: true }).catch((err) => {
+        console.error(`❌ [WA:${userId}] Background reconnect failed: ${err.message}`);
+      });
+    }, 1000)
+  );
 }
 
 function ensureSession(userId) {
@@ -377,16 +358,13 @@ function ensureSession(userId) {
   if (status === 'connected' || status === 'initializing' || status === 'loading' || launchLocks.has(userId)) {
     return getSessionHealth(userId);
   }
-  if (status === 'connecting' && hasQR) {
-    return getSessionHealth(userId);
-  }
-  if (status === 'connecting' && !hasQR && hasClient) {
+  if (status === 'connecting' && (hasQR || hasClient)) {
     return getSessionHealth(userId);
   }
 
   statuses.set(userId, 'initializing');
   initSession(userId).catch((err) => {
-    console.error(`❌ [WA:${userId}] Auto-start failed:`, err.message);
+    console.error(`❌ [WA:${userId}] Auto-start failed: ${err.message}`);
   });
 
   return getSessionHealth(userId);

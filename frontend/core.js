@@ -1,5 +1,6 @@
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const API_URL = '';
+const APP_VERSION = 'v3';
 let token = localStorage.getItem('token');
 let currentUser = JSON.parse(localStorage.getItem('user') || 'null');
 let pollInterval = null, logsInterval = null, qrInterval = null;
@@ -30,6 +31,7 @@ function renderLogin() {
           <div class="text-5xl mb-3">🤖</div>
           <h1 class="text-3xl font-bold text-white">ClockBot</h1>
           <p class="text-slate-400 mt-1 text-sm">WhatsApp Auto Clock-In/Out</p>
+          <div class="mt-3 inline-flex items-center rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-200">${APP_VERSION}</div>
         </div>
         <div id="login-error" class="hidden bg-red-900/30 border border-red-500/30 text-red-400 rounded-lg p-3 mb-4 text-sm"></div>
         <div class="space-y-4">
@@ -83,7 +85,7 @@ function renderApp() {
           <div class="flex items-center gap-3">
             <span class="text-2xl">🤖</span>
             <div><div class="font-bold text-white text-lg leading-tight">ClockBot</div>
-            <div class="text-xs text-slate-500">Auto Clock-In/Out</div></div>
+            <div class="text-xs text-slate-500">Auto Clock-In/Out ${APP_VERSION}</div></div>
           </div>
         </div>
         <nav class="flex-1 p-3 space-y-1">
