@@ -19,7 +19,7 @@ services:
       - key: PORT
         value: "3000"
       - key: PUPPETEER_CACHE_DIR
-        value: "/opt/render/project/src/backend/node_modules/.puppeteer_cache"
+        value: "/opt/render/.cache/puppeteer"
       - key: WA_HEADLESS
         value: "true"
       - key: WHATSAPP_AUTH_DIR
