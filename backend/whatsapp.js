@@ -160,6 +160,11 @@ async function initSession(userId) {
       ...(executablePath ? { executablePath } : {}),
       headless: 'new',
       dumpio: !!process.env.RENDER,
+      env: {
+        ...process.env,
+        // Render doesn't provide a desktop DBus session; this avoids some noisy Chromium probes.
+        DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || 'disabled:'
+      },
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -167,7 +172,8 @@ async function initSession(userId) {
         '--disable-gpu',
         '--no-first-run',
         '--no-zygote',
-        '--single-process'
+        '--single-process',
+        '--disable-features=Translate,MediaRouter,OptimizationHints,CalculateNativeWinOcclusion'
       ]
     }
   });
@@ -212,6 +218,19 @@ async function initSession(userId) {
     console.log(`🔐 [WA:${userId}] Authenticated`);
   });
 
+  client.on('disconnected', async (reason) => {
+    statuses.set(userId, 'disconnected');
+    qrCodes.delete(userId);
+    console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
+    if (manualDisconnects.has(userId)) return;
+    console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
+    scheduleReconnect(userId, 5000, 'Disconnected');
+  });
+
+  client.on('change_battery', (batteryInfo) => {
+    console.log(`🔋 [WA:${userId}] Battery event`, batteryInfo);
+  });
+
   client.on('auth_failure', (msg) => {
     statuses.set(userId, 'disconnected');
     qrCodes.delete(userId);
@@ -229,13 +248,6 @@ async function initSession(userId) {
       console.error(`❌ [WA:${userId}] Max retries reached after auth failure. Manual reconnect required.`);
       retryCount.set(userId, 0);
     }
-  });
-
-  client.on('disconnected', (reason) => {
-    statuses.set(userId, 'disconnected');
-    console.log(`🔴 [WA:${userId}] Disconnected: ${reason}`);
-    console.log(`🔄 [WA:${userId}] Reconnecting in 5s...`);
-    scheduleReconnect(userId, 5000, 'Disconnected');
   });
 
   client.on('message', (msg) => {
@@ -258,6 +270,19 @@ async function initSession(userId) {
 
   try {
     await client.initialize();
+    // Surface browser/page errors after initialization so Render logs show the real failure.
+    client.pupPage?.on('error', (err) => {
+      console.error(`❌ [WA:${userId}] Page crashed:`, err?.message || err);
+    });
+    client.pupPage?.on('pageerror', (err) => {
+      console.error(`❌ [WA:${userId}] Page error:`, err?.message || err);
+    });
+    client.pupPage?.on('framenavigated', (frame) => {
+      const url = frame?.url?.();
+      if (url && url.includes('post_logout=1')) {
+        console.log(`ℹ️ [WA:${userId}] Navigated to logout URL`);
+      }
+    });
   } catch (err) {
     console.error(`❌ [WA:${userId}] Init error:`, err.message);
     statuses.set(userId, 'disconnected');
