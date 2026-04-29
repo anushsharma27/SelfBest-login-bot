@@ -10,6 +10,7 @@ const sockets = new Map();
 const statusCache = new Map();
 const startLocks = new Map();
 const retryTimers = new Map();
+const connectTimers = new Map();
 const retryCounts = new Map();
 const manualDisconnects = new Set();
 const expectedCloses = new Set();
@@ -343,11 +344,40 @@ function clearRetryTimer(userId) {
   }
 }
 
+function clearConnectTimer(userId) {
+  const id = normalizeUserId(userId);
+  const timer = connectTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    connectTimers.delete(id);
+  }
+}
+
+function startConnectWatchdog(userId) {
+  const id = normalizeUserId(userId);
+  clearConnectTimer(id);
+  const timeoutMs = parseInt(process.env.WA_CONNECT_TIMEOUT_MS || '60000', 10);
+  connectTimers.set(id, setTimeout(async () => {
+    const health = await getSessionHealth(id);
+    if (['starting', 'reconnecting', 'qr', 'pairing'].includes(health.status)) {
+      sockets.delete(id);
+      await upsertSessionStatus(id, {
+        status: 'error',
+        qr: null,
+        pairing_code: null,
+        last_error: 'WhatsApp connection timed out. Click Connect WhatsApp again or request a pairing code.',
+      }).catch((err) => console.error(`[WA:${id}] Failed to mark timeout: ${err.message}`));
+    }
+    clearConnectTimer(id);
+  }, timeoutMs));
+}
+
 async function handleConnectionUpdate(userId, sock, update, baileys) {
   const id = normalizeUserId(userId);
   const { connection, lastDisconnect, qr } = update;
 
   if (qr) {
+    clearConnectTimer(id);
     const qrDataUrl = await QRCode.toDataURL(qr);
     await upsertSessionStatus(id, {
       status: 'qr',
@@ -368,6 +398,7 @@ async function handleConnectionUpdate(userId, sock, update, baileys) {
   }
 
   if (connection === 'open') {
+    clearConnectTimer(id);
     retryCounts.set(id, 0);
     manualDisconnects.delete(id);
     await upsertSessionStatus(id, {
@@ -381,6 +412,7 @@ async function handleConnectionUpdate(userId, sock, update, baileys) {
   }
 
   if (connection === 'close') {
+    clearConnectTimer(id);
     sockets.delete(id);
     const code = getDisconnectCode(lastDisconnect?.error);
     const reason = lastDisconnect?.error?.message || `WhatsApp disconnected${code ? ` (${code})` : ''}`;
@@ -472,6 +504,7 @@ async function startSession(userId, options = {}) {
       started_at: startedAt,
       connected_at: null,
     });
+    startConnectWatchdog(id);
 
     try {
       const baileys = await getBaileys();
@@ -546,6 +579,7 @@ async function requestPairingCode(userId, phoneNumber) {
   }
 
   const code = await sock.requestPairingCode(normalized);
+  clearConnectTimer(id);
   await upsertSessionStatus(id, {
     status: 'pairing',
     qr: null,
@@ -560,6 +594,7 @@ async function reconnectSession(userId) {
   const id = normalizeUserId(userId);
   manualDisconnects.delete(id);
   retryCounts.set(id, 0);
+  clearConnectTimer(id);
   await startSession(id, { reconnect: true });
   return getSessionHealth(id);
 }
@@ -568,6 +603,7 @@ async function disconnectSession(userId) {
   const id = normalizeUserId(userId);
   manualDisconnects.add(id);
   clearRetryTimer(id);
+  clearConnectTimer(id);
   retryCounts.set(id, 0);
   await closeSocket(id, 'Manual disconnect', true);
   await upsertSessionStatus(id, {
@@ -583,6 +619,7 @@ async function clearServerAuth(userId) {
   const id = normalizeUserId(userId);
   manualDisconnects.add(id);
   clearRetryTimer(id);
+  clearConnectTimer(id);
   const sock = sockets.get(id);
   sockets.delete(id);
 
@@ -651,10 +688,12 @@ module.exports = {
     },
     reset() {
       for (const timer of retryTimers.values()) clearTimeout(timer);
+      for (const timer of connectTimers.values()) clearTimeout(timer);
       sockets.clear();
       statusCache.clear();
       startLocks.clear();
       retryTimers.clear();
+      connectTimers.clear();
       retryCounts.clear();
       manualDisconnects.clear();
       messageHandlers.clear();
