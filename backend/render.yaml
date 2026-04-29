@@ -3,30 +3,20 @@ services:
     name: whatsapp-clockin
     runtime: node
     rootDir: backend
-    buildCommand: npm install && npx puppeteer browsers install chrome
-    startCommand: node index.js
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
       - key: TURSO_URL
-        value: "libsql://selfbestbot-anushsharma27.aws-ap-south-1.turso.io"
+        sync: false
       - key: TURSO_AUTH_TOKEN
-        value: "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzY5MjYyODAsImlkIjoiMDE5ZGIzOTUtZDgwMS03MWQ1LTlhZDUtZjNiZmNlMzU3NDU0IiwicmlkIjoiNGU5NmE0OTMtMjQyOS00NzRkLWJiNzEtYjRjZjJjZmVlM2NmIn0.w5VvrxqbxViLPHdX8ZzpnbsHoaCpF5Kro1IkIHjdicBPpXo364Ry5pZ-SISMABMZyargCSAWiN-iAiaxlVGEDA"
+        sync: false
       - key: JWT_SECRET
-        value: "mynameisanushsharma"
+        sync: false
       - key: ADMIN_EMAIL
-        value: "anushsharma26@gmail.com"
+        sync: false
       - key: ADMIN_PASSWORD
-        value: "@Nush123"
+        sync: false
       - key: PORT
         value: "3000"
-      - key: PUPPETEER_CACHE_DIR
-        value: "/opt/render/.cache/puppeteer"
-      - key: DBUS_SESSION_BUS_ADDRESS
-        value: "disabled:"
-      - key: WA_HEADLESS
-        value: "true"
-      - key: WHATSAPP_AUTH_DIR
-        value: "/var/data/auth_info"
-    disk:
-      name: auth-info
-      mountPath: /var/data/auth_info
-      sizeGB: 1
+      - key: APP_TIMEZONE
+        value: "Asia/Kolkata"

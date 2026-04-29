@@ -48,6 +48,65 @@ async function initDB() {
     )
   `);
 
+  // Store Baileys auth credentials and signal keys in Turso so Render does not
+  // need a persistent local disk for WhatsApp sessions.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS whatsapp_auth_state (
+      user_id INTEGER NOT NULL,
+      key_type TEXT NOT NULL,
+      key_id TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at TEXT,
+      PRIMARY KEY (user_id, key_type, key_id)
+    )
+  `);
+
+  // Cached WhatsApp connection state for read-only status APIs.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+      user_id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      phone_jid TEXT,
+      qr TEXT,
+      pairing_code TEXT,
+      last_error TEXT,
+      started_at TEXT,
+      connected_at TEXT,
+      updated_at TEXT
+    )
+  `);
+
+  // Durable state for scheduled clock-in/out conversations.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      schedule_id INTEGER NOT NULL,
+      run_date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      state TEXT NOT NULL,
+      started_at TEXT,
+      updated_at TEXT,
+      expires_at TEXT,
+      last_message TEXT,
+      error TEXT,
+      UNIQUE (schedule_id, run_date, type)
+    )
+  `);
+
+  await db.execute({
+    sql: `
+      UPDATE whatsapp_sessions
+      SET status = 'disconnected',
+          qr = NULL,
+          pairing_code = NULL,
+          last_error = NULL,
+          updated_at = ?
+      WHERE status IN ('starting', 'qr', 'pairing', 'connected', 'reconnecting')
+    `,
+    args: [new Date().toISOString()],
+  });
+
   // Seed admin user if none exists
   const adminCheck = await db.execute(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
   if (adminCheck.rows.length === 0) {

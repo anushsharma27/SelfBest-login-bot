@@ -1,6 +1,6 @@
-# ClockBot 🤖 — WhatsApp Auto Clock-In/Out
+# ClockBot — WhatsApp Auto Clock-In/Out
 
-Automate your daily clock-in and clock-out WhatsApp messages using Baileys (WhatsApp Web API) + Turso (SQLite cloud DB).
+Automate daily clock-in and clock-out WhatsApp messages using Baileys (WhatsApp WebSocket API) + Turso (SQLite cloud DB).
 
 ---
 
@@ -23,6 +23,7 @@ JWT_SECRET=any-random-secret-string
 ADMIN_EMAIL=admin@youremail.com
 ADMIN_PASSWORD=yourpassword
 PORT=3000
+APP_TIMEZONE=Asia/Kolkata
 ```
 
 ### 3. Install and run
@@ -50,7 +51,7 @@ Visit `http://localhost:3000` — log in with your `ADMIN_EMAIL` and `ADMIN_PASS
    - Enter the company bot's WhatsApp number (e.g. `919876543210`)
    - Set your shift start time (clock-out auto-calculates at +9h)
    - Choose your working days → Save
-3. Go to **Dashboard** → scan the QR code with your WhatsApp
+3. Go to **Dashboard** → click **Connect WhatsApp** → scan the QR code with your WhatsApp
 4. Done! ClockBot will send messages automatically every day
 
 ---
@@ -60,9 +61,10 @@ Visit `http://localhost:3000` — log in with your `ADMIN_EMAIL` and `ADMIN_PASS
 1. Push code to GitHub
 2. Go to [render.com](https://render.com) → New Web Service → connect your repo
 3. Set **Root Directory** to `backend`
-4. Add all environment variables from `.env`
-5. Add a **Disk** at mount path `/app/auth_info` (1 GB)
-6. Deploy!
+4. Add all environment variables from `.env` in Render, including `APP_TIMEZONE=Asia/Kolkata`
+5. Deploy!
+
+WhatsApp session auth is stored in Turso, so the Render free tier does not need a persistent disk.
 
 ### Keep it alive (free tier)
 Set up [UptimeRobot](https://uptimerobot.com) to ping:
@@ -83,8 +85,8 @@ self-best-bot/
 ├── backend/
 │   ├── index.js          # Express server entry point
 │   ├── db.js             # Turso DB connection + init
-│   ├── whatsapp.js       # Multi-user Baileys session manager
-│   ├── scheduler.js      # Cron job — sends messages every minute
+│   ├── whatsapp.js       # Multi-user Baileys session manager + DB auth store
+│   ├── scheduler.js      # Cron job + durable company-bot workflow state
 │   ├── middleware/
 │   │   └── auth.js       # JWT auth middleware
 │   ├── routes/

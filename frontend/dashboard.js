@@ -12,10 +12,27 @@ async function renderDashboard() {
         <span id="wa-badge" class="badge badge-gray">Checking…</span>
       </div>
       <div id="wa-body" class="min-h-[80px] flex items-center justify-center"><i class="fa-solid fa-spinner fa-spin text-brand-400 text-xl"></i></div>
-      <div class="flex gap-3 mt-4">
-        <button onclick="waReconnect()" class="btn-primary text-white text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-2"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
-        <button onclick="waDisconnect()" class="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-link-slash"></i> Disconnect</button>
-        <button onclick="waClearAuth()" class="bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-trash-can"></i> Delete Server Auth</button>
+      <div class="mt-4 rounded-xl border border-slate-700/50 bg-slate-900/40 p-4">
+        <div class="flex items-center gap-2 mb-3">
+          <i class="fa-solid fa-keyboard text-brand-400"></i>
+          <div>
+            <div class="text-sm font-semibold text-white">Experimental fallback: enter number manually</div>
+            <div class="text-xs text-slate-500">Use this only if QR is too slow. Format: country code + number.</div>
+          </div>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <input id="wa-phone-input" type="text" placeholder="e.g. 919876543210" class="flex-1 rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-white outline-none focus:border-brand-500" />
+          <button onclick="waRequestPairingCode()" class="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2">
+            <i class="fa-solid fa-mobile-screen-button"></i> Get Pairing Code
+          </button>
+        </div>
+        <div id="wa-pairing" class="mt-3 text-sm text-slate-500">No pairing code requested yet.</div>
+      </div>
+      <div class="flex flex-wrap gap-3 mt-4">
+        <button id="wa-connect-btn" onclick="waConnect()" class="btn-primary text-white text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-2"><i class="fa-solid fa-link"></i> Connect WhatsApp</button>
+        <button id="wa-reconnect-btn" onclick="waReconnect()" class="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
+        <button id="wa-disconnect-btn" onclick="waDisconnect()" class="bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-link-slash"></i> Disconnect</button>
+        <button id="wa-clear-btn" onclick="waClearAuth()" class="bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition flex items-center gap-2"><i class="fa-solid fa-trash-can"></i> Delete Server Auth</button>
       </div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -34,74 +51,127 @@ async function renderDashboard() {
     </div>
   </div>`;
   await Promise.all([pollStatus(), loadScheduleSummary(), loadPauseCard(), loadRecentLogs()]);
-  pollInterval = setInterval(pollStatus, 5000);
 }
 
+let waWatchStartedAt = 0;
+
 function stopWALoop() {
-  clearInterval(qrInterval);
+  clearTimeout(qrInterval);
   qrInterval = null;
+  waWatchStartedAt = 0;
 }
 
 function startWALoop() {
   if (qrInterval) return;
-  qrInterval = setInterval(async () => {
-    await loadQR();
-    await pollStatus();
-  }, 2500);
+  waWatchStartedAt = Date.now();
+  runWALoop();
+}
+
+function shouldWatchWA(status) {
+  return ['starting', 'qr', 'pairing', 'reconnecting'].includes(status);
+}
+
+async function runWALoop() {
+  clearTimeout(qrInterval);
+  qrInterval = null;
+  const status = await pollStatus();
+  if (!shouldWatchWA(status)) {
+    stopWALoop();
+    return;
+  }
+  const elapsed = Date.now() - waWatchStartedAt;
+  const delay = elapsed < 30000 ? 2000 : 5000;
+  qrInterval = setTimeout(runWALoop, delay);
+}
+
+function updateWAButtons(status, hasClient) {
+  const busy = ['starting', 'qr', 'pairing', 'reconnecting'].includes(status);
+  const connected = status === 'connected';
+  const connectBtn = document.getElementById('wa-connect-btn');
+  const reconnectBtn = document.getElementById('wa-reconnect-btn');
+  const disconnectBtn = document.getElementById('wa-disconnect-btn');
+  const clearBtn = document.getElementById('wa-clear-btn');
+  if (connectBtn) connectBtn.disabled = busy || connected;
+  if (reconnectBtn) reconnectBtn.disabled = busy;
+  if (disconnectBtn) disconnectBtn.disabled = busy || (!connected && !hasClient);
+  if (clearBtn) clearBtn.disabled = busy;
 }
 
 async function pollStatus() {
   try {
-    const { status, qr, manuallyDisconnected, configured, mode } = await apiFetch('/api/whatsapp/status');
+    const { status, qr, pairingCode, manuallyDisconnected, configured, mode, hasClient, lastError } = await apiFetch('/api/whatsapp/status');
     const badge = document.getElementById('wa-badge');
     const body = document.getElementById('wa-body');
-    if (!badge || !body) return;
+    updateWAButtons(status, hasClient);
+    if (!badge || !body) return status;
     if (status === 'connected') {
       badge.className = 'badge badge-green';
       badge.innerHTML = '<span class="pulse-dot inline-block w-2 h-2 bg-green-400 rounded-full mr-1.5"></span>Connected';
       body.innerHTML = `<div class="flex items-center gap-3 text-green-400"><i class="fa-solid fa-circle-check text-3xl"></i>
-        <div><div class="font-semibold text-white">Connected & Ready</div><div class="text-sm text-slate-400">Messages will send automatically from your WhatsApp</div><div class="text-xs text-slate-500 mt-1">${mode === 'webjs' ? 'Mode: QR Login' : ''}</div></div></div>`;
+        <div><div class="font-semibold text-white">Connected & Ready</div><div class="text-sm text-slate-400">Messages will send automatically from your WhatsApp</div><div class="text-xs text-slate-500 mt-1">${mode === 'baileys' ? 'Mode: Baileys WebSocket' : ''}</div></div></div>`;
       stopWALoop();
-    } else if (status === 'initializing') {
+    } else if (status === 'starting') {
       badge.className = 'badge badge-yellow';
       badge.textContent = 'Starting…';
       body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Starting WhatsApp session…</div>`;
-      startWALoop();
-    } else if (status === 'loading') {
+    } else if (status === 'reconnecting') {
       badge.className = 'badge badge-blue';
-      badge.textContent = 'Loading…';
+      badge.textContent = 'Reconnecting…';
       body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Restoring WhatsApp session…</div>`;
-      startWALoop();
-    } else if (status === 'connecting') {
+    } else if (status === 'qr' || status === 'pairing') {
       badge.className = 'badge badge-yellow';
-      badge.textContent = 'Scan QR';
+      badge.textContent = status === 'pairing' ? 'Pairing' : 'Scan QR';
       renderQR(qr, { manuallyDisconnected, status, configured });
-      startWALoop();
+    } else if (status === 'error' || status === 'logged_out') {
+      badge.className = 'badge badge-red';
+      badge.textContent = status === 'logged_out' ? 'Logged out' : 'Error';
+      body.innerHTML = `<div class="text-red-300 text-sm flex items-center gap-2"><i class="fa-solid fa-triangle-exclamation"></i> ${lastError || 'WhatsApp is not connected. Click Connect WhatsApp to try again.'}</div>`;
     } else {
       badge.className = 'badge badge-red';
       badge.textContent = manuallyDisconnected ? 'Disconnected' : 'Disconnected';
       renderQR(qr, { manuallyDisconnected, status, configured });
-      if (manuallyDisconnected) stopWALoop();
-      else startWALoop();
     }
-  } catch(e) {}
+    renderPairingCode(pairingCode, status);
+    return status;
+  } catch(e) {
+    return 'error';
+  }
 }
 
 async function loadQR() {
   try {
-    const { qr, status, manuallyDisconnected, configured } = await apiFetch('/api/whatsapp/qr');
+    const { qr, pairingCode, status, manuallyDisconnected, configured } = await apiFetch('/api/whatsapp/status');
     renderQR(qr, { status, manuallyDisconnected, configured });
+    renderPairingCode(pairingCode, status);
   } catch(e) {}
+}
+
+function renderPairingCode(pairingCode, status) {
+  const el = document.getElementById('wa-pairing');
+  if (!el) return;
+  if (pairingCode) {
+    el.innerHTML = `<div class="text-slate-400 mb-1">Enter this code in WhatsApp Linked Devices</div><div class="text-xl font-bold tracking-[0.3em] text-brand-300">${pairingCode}</div>`;
+    return;
+  }
+  if (status === 'starting' || status === 'reconnecting') {
+    el.innerHTML = `<div class="text-slate-500 flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Preparing pairing flow…</div>`;
+    return;
+  }
+  if (status === 'qr' || status === 'pairing') {
+    el.innerHTML = `<div class="text-slate-500">Waiting for QR or pairing code…</div>`;
+    return;
+  }
+  el.textContent = 'No pairing code requested yet.';
 }
 
 function renderQR(qr, { status, manuallyDisconnected, configured } = {}) {
   const body = document.getElementById('wa-body');
   if (!body) return;
   if (!qr && manuallyDisconnected) {
-    body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> WhatsApp is disconnected. Click Reconnect to generate a fresh QR.</div>`;
+    body.innerHTML = `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-xmark"></i> WhatsApp is disconnected. Click Connect WhatsApp to generate a QR.</div>`;
     return;
   }
-  if (!qr && status && status !== 'connecting' && status !== 'disconnected') {
+  if (!qr && status && status !== 'qr' && status !== 'pairing' && status !== 'disconnected') {
     body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Preparing WhatsApp login…</div>`;
     return;
   }
@@ -115,7 +185,23 @@ function renderQR(qr, { status, manuallyDisconnected, configured } = {}) {
           <div><span class="text-brand-400 font-bold">3.</span> Link a Device → Scan QR</div>
           <div class="text-xs text-slate-600 mt-2">This QR refreshes automatically</div>
         </div></div>`
-    : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Generating QR…</div>`;
+    : `<div class="text-slate-500 text-sm flex items-center gap-2"><i class="fa-solid fa-circle-info"></i> Click Connect WhatsApp to start QR generation.</div>`;
+}
+
+async function waConnect() {
+  try {
+    const badge = document.getElementById('wa-badge');
+    const body = document.getElementById('wa-body');
+    if (badge) {
+      badge.className = 'badge badge-yellow';
+      badge.textContent = 'Starting…';
+    }
+    if (body) {
+      body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Starting WhatsApp session…</div>`;
+    }
+    await apiFetch('/api/whatsapp/connect', { method:'POST' });
+    startWALoop();
+  } catch(e){alert(e.message);}
 }
 
 async function waReconnect() {
@@ -129,9 +215,8 @@ async function waReconnect() {
     if (body) {
       body.innerHTML = `<div class="text-slate-400 text-sm flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Restarting WhatsApp session…</div>`;
     }
-    startWALoop();
     await apiFetch('/api/whatsapp/reconnect',{method:'POST'});
-    await pollStatus();
+    startWALoop();
   } catch(e){alert(e.message);}
 }
 async function waDisconnect() {
@@ -149,6 +234,27 @@ async function waClearAuth() {
     stopWALoop();
     await apiFetch('/api/whatsapp/clear-auth', { method:'POST' });
     await pollStatus();
+  } catch(e){alert(e.message);}
+}
+
+async function waRequestPairingCode() {
+  const input = document.getElementById('wa-phone-input');
+  const pairingEl = document.getElementById('wa-pairing');
+  const phoneNumber = input?.value?.trim();
+  if (!phoneNumber) {
+    alert('Enter your WhatsApp number with country code first.');
+    return;
+  }
+  try {
+    if (pairingEl) {
+      pairingEl.innerHTML = `<div class="text-slate-500 flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> Requesting pairing code…</div>`;
+    }
+    const { pairingCode } = await apiFetch('/api/whatsapp/pair-code', {
+      method: 'POST',
+      body: JSON.stringify({ phoneNumber })
+    });
+    renderPairingCode(pairingCode, 'pairing');
+    startWALoop();
   } catch(e){alert(e.message);}
 }
 

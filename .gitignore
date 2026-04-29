@@ -1,11 +1,17 @@
 # Dependencies
 node_modules/
+.npm-cache/
+backend/.npm-cache/
 
 # Environment
 .env
 
 # WhatsApp auth sessions
 auth_info/
+backend/auth_info/
+backend/auth_info_baileys/
+backend/.wwebjs_auth/
+backend/.wwebjs_cache/
 
 # Build output
 dist/

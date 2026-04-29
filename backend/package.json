@@ -6,9 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "test": "node --test"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "@libsql/client": "^0.14.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -16,8 +17,6 @@
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
-    "puppeteer": "^24.31.0",
-    "qrcode": "^1.5.4",
-    "whatsapp-web.js": "^1.34.1"
+    "qrcode": "^1.5.4"
   }
 }

@@ -5,6 +5,7 @@ const { reloadSchedule } = require('../scheduler');
 const { sendMessage, getStatus } = require('../whatsapp');
 
 const router = express.Router();
+const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
 
 // All routes require authentication
 router.use(requireAuth);
@@ -18,6 +19,19 @@ function addHours(timeStr, hours) {
   const newH = Math.floor(totalMinutes / 60) % 24;
   const newM = totalMinutes % 60;
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+}
+
+function getAppDate() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date()).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 // GET /api/schedule — get current user's schedule
@@ -122,7 +136,7 @@ router.patch('/toggle', async (req, res) => {
 // POST /api/schedule/pause-today — add today to paused_dates
 router.post('/pause-today', async (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getAppDate();
     const result = await db.execute({
       sql: `SELECT id, paused_dates FROM schedules WHERE user_id = ?`,
       args: [req.user.id],
@@ -158,7 +172,7 @@ router.post('/pause-today', async (req, res) => {
 // DELETE /api/schedule/pause-today — remove today from paused_dates
 router.delete('/pause-today', async (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getAppDate();
     const result = await db.execute({
       sql: `SELECT id, paused_dates FROM schedules WHERE user_id = ?`,
       args: [req.user.id],

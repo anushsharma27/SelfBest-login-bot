@@ -1,4 +1,4 @@
-# Security & Privacy — ClockBot 🤖
+# Security & Privacy — ClockBot
 
 This document explains in plain English exactly what this app does, what data it touches, and what it doesn't.
 
@@ -6,7 +6,7 @@ This document explains in plain English exactly what this app does, what data it
 
 ## What is Baileys?
 
-Baileys is an open-source library that connects to WhatsApp using the same protocol as **WhatsApp Web** (the browser version). When you scan the QR code:
+Baileys is an open-source library that connects to WhatsApp using the same linked-device protocol as **WhatsApp Web**, but without running a browser. When you scan the QR code:
 
 - Your phone **links** ClockBot as a secondary device — exactly like scanning a QR code on web.whatsapp.com
 - Your phone stays as the primary — ClockBot is just a linked device
@@ -26,25 +26,29 @@ Both messages go to a single destination: the company bot's WhatsApp number you 
 
 ## What does this app NOT do?
 
-- ❌ Does **not** read any of your WhatsApp messages or chats
+- ❌ Does **not** read your general WhatsApp chats
 - ❌ Does **not** access your contacts list
 - ❌ Does **not** download or view any media
 - ❌ Does **not** send messages to anyone except the bot number you set
 - ❌ Does **not** store your WhatsApp message history
 
+ClockBot does inspect incoming text from the configured company bot number only, so it can detect replies like `please provide status`, `clocked in`, and `clocked out`.
+
 ---
 
 ## What data is stored?
 
-Only three things are stored in the database:
+These things are stored in the database:
 
 | Data | Purpose |
 |------|---------|
 | Your name, email, password (hashed) | Login authentication |
 | Your schedule settings | Knowing when to send messages |
 | A log of sent messages | So you can verify messages were sent |
+| WhatsApp linked-device credentials | So you do not need to scan a QR after every restart |
+| Automation run state | So restarts do not duplicate or lose an in-progress clock-in/out flow |
 
-Your WhatsApp session credentials are stored **only on the server disk** inside `auth_info/{userId}/` — these are the same credentials WhatsApp Web uses to keep you logged in.
+Your WhatsApp linked-device credentials are stored in Turso as serialized Baileys auth state. They are the same kind of credentials WhatsApp Web uses to keep a linked device logged in.
 
 ---
 
